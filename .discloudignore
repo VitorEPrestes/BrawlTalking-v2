@@ -1,0 +1,27 @@
+# Dependencias
+node_modules
+
+# Controle de versao e editor
+.git
+.vscode
+.idea
+
+# Logs
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+debug.log
+error.log
+
+# Ambiente local
+.env
+.env.local
+
+# Arquivos do sistema
+.DS_Store
+Thumbs.db
+
+# Saidas locais desnecessarias
+dist
+coverage
+.cache
