@@ -22,4 +22,11 @@ npm install
 node server.js
 ```
 
+Variáveis de ambiente recomendadas:
+
+- `ADMIN_PASSWORD`: senha do painel administrativo.
+- `TOKEN_SECRET`: segredo usado para assinar tokens de autenticação.
+
+Em produção (`NODE_ENV=production`), o servidor exige `ADMIN_PASSWORD` e `TOKEN_SECRET` definidos com valores fortes.
+
 Contribuições são bem-vindas. Abra issues ou PRs no repositório remoto.

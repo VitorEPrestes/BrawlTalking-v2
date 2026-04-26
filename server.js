@@ -5,18 +5,24 @@ const crypto = require('crypto');
 
 const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || '0.0.0.0';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
-const TOKEN_SECRET = process.env.TOKEN_SECRET || 'brawltalkie-reborn-dev-secret';
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const DEFAULT_ADMIN_PASSWORD = 'admin123';
+const DEFAULT_TOKEN_SECRET = 'brawltalkie-reborn-dev-secret';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
+const TOKEN_SECRET = process.env.TOKEN_SECRET || DEFAULT_TOKEN_SECRET;
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const PRIMARY_PORTRAITS_DIR = path.join(__dirname, 'Portraits');
 const LEGACY_PORTRAITS_DIR = path.join(__dirname, 'BrawlTalking', 'portraits');
 const PORTRAITS_DIR = fs.existsSync(PRIMARY_PORTRAITS_DIR) ? PRIMARY_PORTRAITS_DIR : LEGACY_PORTRAITS_DIR;
+const CHAT_CONFIG_PATH = path.join(__dirname, 'chat-config.json');
 
 const MAX_BODY_BYTES = 1_000_000;
 const MESSAGE_LIMIT = 5;
 const MESSAGE_WINDOW_MS = 60_000;
 const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const ADMIN_STREAM_TICKET_TTL_MS = 2 * 60 * 1000;
+const CONVERSATION_RETENTION_MS = 10 * 60 * 1000;
 
 const brawlers = [
   { id: 'spike', name: 'Spike', image: 'spike_portrait.png' },
@@ -37,6 +43,9 @@ const adminStreams = new Set();
 const userStreams = new Map();
 const messageWindows = new Map();
 const loginAttempts = new Map();
+const nicknameValidationAttempts = new Map();
+const adminStreamTickets = new Map();
+const conversationCloseTimers = new Map();
 
 const metrics = {
   totalJoins: 0,
@@ -77,8 +86,59 @@ let nicknameBlacklist = new Set([
 let moderationMode = 'flag';
 let featuredBrawlerId = '';
 
+const DEFAULT_CHAT_CONFIG = {
+  welcomeMessages: [
+    'Ola, {userName}! Voce esta conversando com {brawlerName}. Como posso te ajudar hoje?'
+  ],
+  statusTexts: ['esta pensando']
+};
+
 function nowIso() {
   return new Date().toISOString();
+}
+
+function readChatConfig() {
+  try {
+    const raw = fs.readFileSync(CHAT_CONFIG_PATH, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return { default: DEFAULT_CHAT_CONFIG, brawlers: {} };
+  }
+}
+
+function resolveChatConfig(brawlerId) {
+  const config = readChatConfig();
+  const base = config?.default || {};
+  const custom = config?.brawlers?.[brawlerId] || {};
+  const welcomeMessages = Array.isArray(custom.welcomeMessages) && custom.welcomeMessages.length
+    ? custom.welcomeMessages
+    : Array.isArray(base.welcomeMessages) && base.welcomeMessages.length
+      ? base.welcomeMessages
+      : DEFAULT_CHAT_CONFIG.welcomeMessages;
+  const statusTexts = Array.isArray(custom.statusTexts) && custom.statusTexts.length
+    ? custom.statusTexts
+    : Array.isArray(base.statusTexts) && base.statusTexts.length
+      ? base.statusTexts
+      : DEFAULT_CHAT_CONFIG.statusTexts;
+
+  return { welcomeMessages, statusTexts };
+}
+
+function randomItem(items, fallback) {
+  if (!Array.isArray(items) || !items.length) return fallback;
+  return items[Math.floor(Math.random() * items.length)] || fallback;
+}
+
+function applyChatTemplate(template, { userName, brawlerName }) {
+  return String(template || '')
+    .replaceAll('{userName}', userName)
+    .replaceAll('{brawlerName}', brawlerName);
+}
+
+function buildWelcomeMessage(userName, brawler) {
+  const config = resolveChatConfig(brawler.id);
+  const template = randomItem(config.welcomeMessages, DEFAULT_CHAT_CONFIG.welcomeMessages[0]);
+  return applyChatTemplate(template, { userName, brawlerName: brawler.name });
 }
 
 function generateId(prefix = 'id') {
@@ -229,14 +289,21 @@ function removeUserStream(convId, res) {
 function readJson(req) {
   return new Promise((resolve, reject) => {
     let body = '';
+    let totalBytes = 0;
+    let settled = false;
     req.on('data', (chunk) => {
-      body += chunk;
-      if (body.length > MAX_BODY_BYTES) {
+      if (settled) return;
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_BODY_BYTES) {
+        settled = true;
         reject(Object.assign(new Error('Payload too large'), { status: 413 }));
         req.destroy();
+        return;
       }
+      body += chunk.toString('utf8');
     });
     req.on('end', () => {
+      if (settled) return;
       if (!body.trim()) return resolve({});
       try {
         resolve(JSON.parse(body));
@@ -244,13 +311,32 @@ function readJson(req) {
         reject(Object.assign(new Error('Invalid JSON'), { status: 400 }));
       }
     });
-    req.on('error', reject);
+    req.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
   });
+}
+
+function baseSecurityHeaders() {
+  const headers = {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+    'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+  };
+  if (NODE_ENV === 'production') {
+    headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains';
+  }
+  return headers;
 }
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
+    ...baseSecurityHeaders(),
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
     'Content-Length': Buffer.byteLength(body)
@@ -259,7 +345,10 @@ function sendJson(res, status, payload) {
 }
 
 function sendEmpty(res, status = 204) {
-  res.writeHead(status, { 'Cache-Control': 'no-store' });
+  res.writeHead(status, {
+    ...baseSecurityHeaders(),
+    'Cache-Control': 'no-store'
+  });
   res.end();
 }
 
@@ -294,6 +383,42 @@ function checkMessageLimit(convId) {
   kept.push(now);
   messageWindows.set(convId, kept);
   return { allowed: true, retryAfterMs: 0 };
+}
+
+function checkNicknameValidationLimit(ip) {
+  const now = Date.now();
+  const entry = nicknameValidationAttempts.get(ip) || { count: 0, resetAt: now + 60_000 };
+  if (now > entry.resetAt) {
+    entry.count = 0;
+    entry.resetAt = now + 60_000;
+  }
+  if (entry.count >= 12) {
+    return false;
+  }
+  entry.count += 1;
+  nicknameValidationAttempts.set(ip, entry);
+  return true;
+}
+
+function pruneAdminStreamTickets() {
+  const now = Date.now();
+  for (const [ticket, expiresAt] of adminStreamTickets.entries()) {
+    if (expiresAt <= now) adminStreamTickets.delete(ticket);
+  }
+}
+
+function issueAdminStreamTicket() {
+  pruneAdminStreamTickets();
+  const ticket = generateId('evt');
+  adminStreamTickets.set(ticket, Date.now() + ADMIN_STREAM_TICKET_TTL_MS);
+  return ticket;
+}
+
+function verifyAdminStreamTicket(ticket) {
+  if (!ticket || typeof ticket !== 'string') return false;
+  pruneAdminStreamTickets();
+  const expiresAt = adminStreamTickets.get(ticket);
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
 }
 
 function collectMetrics(convList) {
@@ -340,8 +465,25 @@ function rankingPayload() {
   return { ranking, featuredBrawlerId };
 }
 
+function clearConversationCloseTimer(convId) {
+  const timer = conversationCloseTimers.get(convId);
+  if (!timer) return;
+  clearTimeout(timer);
+  conversationCloseTimers.delete(convId);
+}
+
+function scheduleConversationClose(convId) {
+  clearConversationCloseTimer(convId);
+  const timer = setTimeout(() => {
+    conversationCloseTimers.delete(convId);
+    if (!userStreams.has(convId)) closeConversation(convId);
+  }, CONVERSATION_RETENTION_MS);
+  conversationCloseTimers.set(convId, timer);
+}
+
 function closeConversation(convId) {
   if (!conversations.has(convId)) return;
+  clearConversationCloseTimer(convId);
   conversations.delete(convId);
   messageWindows.delete(convId);
   metrics.pendingResponses.delete(convId);
@@ -359,11 +501,19 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { brawlers });
   }
 
+  if (req.method === 'GET' && pathname === '/api/chat-config') {
+    return sendJson(res, 200, readChatConfig());
+  }
+
   if (req.method === 'GET' && pathname === '/api/ranking') {
     return sendJson(res, 200, rankingPayload());
   }
 
   if (req.method === 'POST' && pathname === '/api/validate-nickname') {
+    const ip = req.socket.remoteAddress || 'local';
+    if (!checkNicknameValidationLimit(ip)) {
+      return sendJson(res, 429, { blocked: false, message: 'Muitas validações. Tente novamente em instantes.' });
+    }
     const body = await readJson(req);
     const nickname = sanitizeText(body.nickname, 30);
     if (!nickname) return sendJson(res, 400, { blocked: false, message: 'Informe um apelido.' });
@@ -399,7 +549,7 @@ async function handleApi(req, res, url) {
         id: generateId('msg'),
         type: 'brawler',
         isWelcome: true,
-        text: `Olá, ${userName}! Você está conversando com ${brawler.name}. Estou aqui para responder às suas perguntas e conversar sobre o universo de Brawl Stars. Como posso te ajudar hoje?`,
+        text: buildWelcomeMessage(userName, brawler),
         timestamp: nowIso(),
         reactions: {}
       };
@@ -419,6 +569,7 @@ async function handleApi(req, res, url) {
       broadcastAdmin('conversation-upsert', { conversation: conversationSummary(conv) });
       broadcastAdmin('ranking-update', rankingPayload());
     }
+    clearConversationCloseTimer(sessionId);
 
     return sendJson(res, 200, {
       conversation: conversationSummary(conv),
@@ -517,6 +668,13 @@ async function handleApi(req, res, url) {
   if (pathname.startsWith('/api/admin/')) {
     if (!requireAdmin(req, res)) return;
 
+    if (req.method === 'POST' && pathname === '/api/admin/events-ticket') {
+      return sendJson(res, 200, {
+        ticket: issueAdminStreamTicket(),
+        expiresInMs: ADMIN_STREAM_TICKET_TTL_MS
+      });
+    }
+
     if (req.method === 'GET' && pathname === '/api/admin/conversations') {
       return sendJson(res, 200, {
         conversations: Array.from(conversations.values()).map(conversationSummary)
@@ -597,6 +755,10 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === 'POST' && pathname === '/api/admin/metrics/reset') {
+      for (const timer of conversationCloseTimers.values()) {
+        clearTimeout(timer);
+      }
+      conversationCloseTimers.clear();
       conversations.clear();
       messageWindows.clear();
       metrics.totalJoins = 0;
@@ -655,6 +817,7 @@ async function handleApi(req, res, url) {
 function handleEvents(req, res, searchParams) {
   const role = searchParams.get('role');
   res.writeHead(200, {
+    ...baseSecurityHeaders(),
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-store, no-transform',
     Connection: 'keep-alive',
@@ -667,8 +830,8 @@ function handleEvents(req, res, searchParams) {
   }, 25_000);
 
   if (role === 'admin') {
-    const token = searchParams.get('token') || '';
-    if (!verifyToken(token)) {
+    const ticket = sanitizeText(searchParams.get('ticket'), 80);
+    if (!verifyAdminStreamTicket(ticket)) {
       writeEvent(res, 'unauthorized', { error: 'Unauthorized.' });
       res.end();
       clearInterval(ping);
@@ -701,7 +864,7 @@ function handleEvents(req, res, searchParams) {
       }
       clearInterval(ping);
       removeUserStream(convId, res);
-      if (!userStreams.has(convId)) closeConversation(convId);
+      if (!userStreams.has(convId)) scheduleConversationClose(convId);
     });
     return;
   }
@@ -756,7 +919,10 @@ function serveStatic(req, res, url) {
   }
 
   if (!filePath) {
-    res.writeHead(403);
+    res.writeHead(403, {
+      ...baseSecurityHeaders(),
+      'Cache-Control': 'no-store'
+    });
     res.end('Forbidden');
     return;
   }
@@ -766,11 +932,15 @@ function serveStatic(req, res, url) {
     const target = statErr || !stat.isFile() ? fallback : filePath;
     fs.readFile(target, (readErr, data) => {
       if (readErr) {
-        res.writeHead(404);
+        res.writeHead(404, {
+          ...baseSecurityHeaders(),
+          'Cache-Control': 'no-store'
+        });
         res.end('Not found');
         return;
       }
       res.writeHead(200, {
+        ...baseSecurityHeaders(),
         'Content-Type': mimeType(target),
         ...cacheHeaders(target)
       });
@@ -797,9 +967,30 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+if (NODE_ENV === 'production') {
+  if (ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD || TOKEN_SECRET === DEFAULT_TOKEN_SECRET) {
+    throw new Error('Defina ADMIN_PASSWORD e TOKEN_SECRET no ambiente de produção antes de iniciar o servidor.');
+  }
+}
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal] Unhandled Rejection:', reason);
+  process.exitCode = 1;
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[fatal] Uncaught Exception:', error);
+  process.exit(1);
+});
+
 server.listen(PORT, HOST, () => {
   const displayHost = HOST === '0.0.0.0' ? 'localhost' : HOST;
   console.log(`BrawlTalkie Reborn rodando em http://${displayHost}:${PORT}`);
   console.log(`Painel admin: http://${displayHost}:${PORT}/admin`);
-  console.log(`Senha admin padrao: ${ADMIN_PASSWORD}`);
+  if (NODE_ENV !== 'production' && ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD) {
+    console.warn('Aviso: usando senha admin default em ambiente de desenvolvimento.');
+  }
+  if (TOKEN_SECRET === DEFAULT_TOKEN_SECRET) {
+    console.warn('Aviso: TOKEN_SECRET padrao em uso. Defina um valor forte para ambientes compartilhados/producao.');
+  }
 });

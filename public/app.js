@@ -2,7 +2,8 @@ const app = document.getElementById('app');
 
 const STORAGE = {
   userName: 'brawltalkie:userName',
-  adminToken: 'brawltalkie:adminToken'
+  adminToken: 'brawltalkie:adminToken',
+  chatSession: 'brawltalkie:chatSession'
 };
 
 const SESSION = {
@@ -89,6 +90,7 @@ const state = {
   ranking: {},
   featuredBrawlerId: '',
   rankingLoaded: false,
+  chatConfig: null,
   chat: null,
   userEvents: null,
   adminEvents: null,
@@ -97,21 +99,38 @@ const state = {
     started: false,
     tab: 'chats',
     conversations: [],
+    loadingConversations: false,
+    conversationsError: '',
     details: {},
+    detailLoadingId: '',
+    detailError: { convId: '', message: '' },
     activeConvId: '',
     replyDraft: '',
     shouldStickToBottom: true,
     typingTimer: 0,
+    reconnectTimer: 0,
     pendingRender: false,
     sendingReply: false,
     metrics: null,
-    moderation: null
+    metricsLoading: false,
+    metricsError: '',
+    moderation: null,
+    moderationLoading: false,
+    moderationError: ''
   }
+};
+
+const DEFAULT_CHAT_CONFIG = {
+  welcomeMessages: [
+    'Ola, {userName}! Voce esta conversando com {brawlerName}. Como posso te ajudar hoje?'
+  ],
+  statusTexts: ['esta pensando']
 };
 
 let toastTimer = 0;
 let adminClock = 0;
 let rankingTimer = 0;
+let chatConfigPromise = null;
 
 function purgeLegacyChatStorage() {
   const prefixes = [
@@ -153,6 +172,56 @@ function escapeAttr(value) {
 
 function getBrawler(id) {
   return brawlers.find((brawler) => brawler.id === id) || null;
+}
+
+function pickRandomItem(items, fallback) {
+  if (!Array.isArray(items) || !items.length) return fallback;
+  return items[Math.floor(Math.random() * items.length)] || fallback;
+}
+
+function resolveChatConfigForBrawler(brawlerId) {
+  const config = state.chatConfig || {};
+  const base = config.default || {};
+  const custom = config.brawlers?.[brawlerId] || {};
+  const welcomeMessages = Array.isArray(custom.welcomeMessages) && custom.welcomeMessages.length
+    ? custom.welcomeMessages
+    : Array.isArray(base.welcomeMessages) && base.welcomeMessages.length
+      ? base.welcomeMessages
+      : DEFAULT_CHAT_CONFIG.welcomeMessages;
+  const statusTexts = Array.isArray(custom.statusTexts) && custom.statusTexts.length
+    ? custom.statusTexts
+    : Array.isArray(base.statusTexts) && base.statusTexts.length
+      ? base.statusTexts
+      : DEFAULT_CHAT_CONFIG.statusTexts;
+
+  return { welcomeMessages, statusTexts };
+}
+
+function randomTypingText(brawlerId) {
+  return pickRandomItem(
+    resolveChatConfigForBrawler(brawlerId).statusTexts,
+    DEFAULT_CHAT_CONFIG.statusTexts[0]
+  );
+}
+
+async function ensureChatConfigLoaded() {
+  if (state.chatConfig) return state.chatConfig;
+  if (!chatConfigPromise) {
+    chatConfigPromise = api('/api/chat-config')
+      .then((data) => {
+        state.chatConfig = data;
+        return data;
+      })
+      .catch(() => {
+        const fallback = { default: DEFAULT_CHAT_CONFIG, brawlers: {} };
+        state.chatConfig = fallback;
+        return fallback;
+      })
+      .finally(() => {
+        chatConfigPromise = null;
+      });
+  }
+  return chatConfigPromise;
 }
 
 function brawlerPayload(brawler) {
@@ -223,6 +292,114 @@ function clientId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function chatSessionStorageKey(brawlerId, userName) {
+  return `${STORAGE.chatSession}:${brawlerId}:${encodeURIComponent(userName)}`;
+}
+
+function getOrCreateChatSessionId(brawlerId, userName) {
+  const key = chatSessionStorageKey(brawlerId, userName);
+  try {
+    const stored = localStorage.getItem(key);
+    if (stored) return stored;
+    const created = clientId();
+    localStorage.setItem(key, created);
+    return created;
+  } catch {
+    return clientId();
+  }
+}
+
+function renderEmptyState({ icon = '💬', title = '', description = '', actionLabel = '', actionAttr = '' } = {}) {
+  const action = actionLabel && actionAttr
+    ? `<div class="empty-actions"><button class="secondary-button" type="button" ${actionAttr}>${escapeHtml(actionLabel)}</button></div>`
+    : '';
+  return `
+    <div class="empty-state">
+      <div class="empty-card">
+        <div class="empty-icon" aria-hidden="true">${escapeHtml(icon)}</div>
+        <h2>${escapeHtml(title)}</h2>
+        <p>${escapeHtml(description)}</p>
+        ${action}
+      </div>
+    </div>
+  `;
+}
+
+function renderConversationSkeleton(rows = 5) {
+  return Array.from({ length: rows }, () => `
+    <div class="conversation-skeleton" aria-hidden="true">
+      <span class="skeleton skeleton-avatar"></span>
+      <span class="skeleton-stack">
+        <span class="skeleton skeleton-line"></span>
+        <span class="skeleton skeleton-line short"></span>
+      </span>
+      <span class="skeleton skeleton-badge"></span>
+    </div>
+  `).join('');
+}
+
+function renderMessageSkeleton(rows = 4) {
+  return Array.from({ length: rows }, (_, index) => `
+    <div class="message-skeleton ${index % 2 === 0 ? 'is-user' : ''}" aria-hidden="true">
+      ${index % 2 === 0 ? '' : '<span class="skeleton skeleton-avatar small"></span>'}
+      <span class="message-stack">
+        <span class="skeleton skeleton-line ${index % 2 === 0 ? 'medium' : ''}"></span>
+        <span class="skeleton skeleton-line short"></span>
+      </span>
+    </div>
+  `).join('');
+}
+
+function renderMetricSkeleton(cards = 6) {
+  return `
+    <div class="metrics-grid" aria-hidden="true">
+      ${Array.from({ length: cards }, () => `
+        <article class="metric-card">
+          <p class="skeleton skeleton-line short"></p>
+          <div class="metric-value skeleton skeleton-line"></div>
+          <p class="metric-sub skeleton skeleton-line medium"></p>
+        </article>
+      `).join('')}
+    </div>
+    <section class="ranking-panel" aria-hidden="true">
+      <p class="skeleton skeleton-line short"></p>
+      ${Array.from({ length: 4 }, () => `
+        <div class="bar-row skeleton-bar-row">
+          <span class="skeleton skeleton-line short"></span>
+          <span class="bar-track"><span class="bar-fill skeleton-fill" style="width: 100%"></span></span>
+          <span class="skeleton skeleton-line short"></span>
+        </div>
+      `).join('')}
+    </section>
+  `;
+}
+
+function renderModerationSkeleton() {
+  return `
+    <div class="settings-grid" aria-hidden="true">
+      <div class="metric-card"><p class="skeleton skeleton-line short"></p><div class="skeleton skeleton-line"></div></div>
+      <div class="metric-card"><p class="skeleton skeleton-line short"></p><div class="skeleton skeleton-line"></div></div>
+    </div>
+    <div class="editors-grid" aria-hidden="true">
+      ${Array.from({ length: 2 }, () => `
+        <section class="editor">
+          <p class="skeleton skeleton-line short"></p>
+          <p class="skeleton skeleton-line medium"></p>
+          <div class="editor-form">
+            <span class="skeleton skeleton-line"></span>
+            <span class="skeleton skeleton-line short"></span>
+          </div>
+          <div class="chip-list">
+            <span class="skeleton skeleton-chip"></span>
+            <span class="skeleton skeleton-chip"></span>
+            <span class="skeleton skeleton-chip"></span>
+          </div>
+        </section>
+      `).join('')}
+    </div>
+  `;
+}
+
 function closeUserEvents() {
   if (state.chat?.rateLimitTimer) clearInterval(state.chat.rateLimitTimer);
   state.userEvents?.close();
@@ -231,9 +408,21 @@ function closeUserEvents() {
 }
 
 function closeAdminEvents() {
+  clearTimeout(state.admin.reconnectTimer);
+  state.admin.reconnectTimer = 0;
   state.adminEvents?.close();
   state.adminEvents = null;
   state.admin.started = false;
+}
+
+function scheduleAdminReconnect() {
+  if (!state.admin.token || state.admin.reconnectTimer) return;
+  state.admin.reconnectTimer = window.setTimeout(() => {
+    state.admin.reconnectTimer = 0;
+    if (!state.admin.token || state.view !== 'admin') return;
+    state.admin.started = false;
+    startAdmin();
+  }, 1500);
 }
 
 function startAdminClock() {
@@ -354,6 +543,7 @@ function route() {
 
 function renderHomeRoute() {
   state.view = 'home';
+  void ensureChatConfigLoaded();
   renderHome();
   document.body.classList.remove('view-chat');
   if (!hasSeenHumanNotice()) {
@@ -419,11 +609,11 @@ function renderHome() {
       <aside class="home-rail">
         <div>
           <h1 class="brand">Brawl Talk<span class="brand-ing">ing</span></h1>
-          <p>Converse em tempo real com seus Brawlers favoritos em uma experiência temática, rápida e contínua.</p>
+          <p>Converse em tempo real com seus Brawlers favoritos.</p>
         </div>
         <div class="rail-status" aria-label="Resumo">
           <div class="status-item"><span>Conversas</span><strong>${totalConversations}</strong></div>
-          <div class="status-item"><span>Personagens</span><strong>${brawlers.length}</strong></div>
+          <div class="status-item"><span>Brawlers</span><strong>${brawlers.length}</strong></div>
           <div class="status-item"><span>Apelido</span><strong>${userName ? escapeHtml(userName) : 'Novo'}</strong></div>
         </div>
         <p class="soft">Este conteúdo é não oficial e não é endossado pela Supercell. Saiba mais em <a class="soft" href="https://supercell.com/fan-content-policy" target="_blank" rel="noopener noreferrer">supercell.com/fan-content-policy</a>.</p>
@@ -432,9 +622,10 @@ function renderHome() {
         <div class="home-top">
           <div>
             <h2>Escolha um Brawler</h2>
-            <div class="muted">O ranking se reorganiza conforme novas conversas começam.</div>
+            <div class="muted">${state.rankingLoaded ? 'O ranking se reorganiza conforme novas conversas começam.' : 'Atualizando ranking ao vivo...'}</div>
           </div>
           <div class="home-actions">
+            <button class="secondary-button" type="button" data-open-admin>Painel admin</button>
             ${userName ? `<button class="secondary-button" data-change-name>Trocar apelido</button>` : ''}
           </div>
         </div>
@@ -446,7 +637,7 @@ function renderHome() {
               <button class="brawler-card" data-brawler="${escapeAttr(brawler.id)}" aria-label="Conversar com ${escapeAttr(brawler.name)}" style="background-color:${escapeAttr(brawler.bgColor || '')};">
                 ${isTop ? `<span class="badge card-badge">${state.featuredBrawlerId === brawler.id ? 'Destaque' : 'Popular'}</span>` : ''}
                 <span class="badge count-badge">${count}</span>
-                <img src="${escapeAttr(brawler.image)}" alt="${escapeAttr(brawler.name)}" draggable="false" />
+                <img src="${escapeAttr(brawler.image)}" alt="Retrato de ${escapeAttr(brawler.name)}" draggable="false" decoding="async" />
                 <span class="brawler-card-content">
                   <h3>${escapeHtml(brawler.name)}</h3>
                   <p>${escapeHtml(brawler.tagline)}</p>
@@ -468,6 +659,9 @@ function bindHome() {
       const brawler = getBrawler(button.dataset.brawler);
       if (brawler) openNicknameModal(brawler);
     });
+  });
+  app.querySelector('[data-open-admin]')?.addEventListener('click', () => {
+    navigateTo('/admin');
   });
   app.querySelector('[data-change-name]')?.addEventListener('click', () => {
     localStorage.removeItem(STORAGE.userName);
@@ -532,8 +726,9 @@ function openNicknameModal(brawler) {
         <form class="form-stack" data-nickname-form>
           <label class="sr-only" for="nickname">Apelido</label>
           <input class="field" id="nickname" name="nickname" maxlength="30" autocomplete="off" placeholder="Seu apelido" value="${escapeAttr(saved)}" />
+          <div class="field-meta"><span class="soft">Use um apelido curto para aparecer no painel.</span><span class="soft" data-nickname-count>${saved.length}/30</span></div>
           <div class="form-error" data-modal-error></div>
-          <button class="primary-button" type="submit">Entrar no chat</button>
+          <button class="primary-button" type="submit" data-submit-nickname>Entrar no chat</button>
         </form>
       </div>
     </section>
@@ -542,7 +737,22 @@ function openNicknameModal(brawler) {
 
   const input = modal.querySelector('#nickname');
   const error = modal.querySelector('[data-modal-error]');
+  const submit = modal.querySelector('[data-submit-nickname]');
+  const counter = modal.querySelector('[data-nickname-count]');
   window.setTimeout(() => input.focus(), 30);
+
+  const syncNicknameState = (submitting = false) => {
+    const value = input.value.trim();
+    counter.textContent = `${value.length}/30`;
+    submit.disabled = submitting || !value;
+    submit.textContent = submitting ? 'Validando...' : 'Entrar no chat';
+  };
+
+  input.addEventListener('input', () => {
+    error.textContent = '';
+    syncNicknameState();
+  });
+  syncNicknameState();
 
   modal.addEventListener('click', (event) => {
     if (event.target === modal || event.target.closest('[data-close-modal]')) {
@@ -556,6 +766,7 @@ function openNicknameModal(brawler) {
     const name = input.value.trim();
     if (!name) return;
     error.textContent = '';
+    syncNicknameState(true);
     try {
       const data = await api('/api/validate-nickname', {
         method: 'POST',
@@ -570,6 +781,7 @@ function openNicknameModal(brawler) {
       navigateTo(`/chat/${encodeURIComponent(brawler.id)}`);
     } catch (err) {
       error.textContent = err.message || 'Não foi possível validar o apelido.';
+      syncNicknameState();
     }
   });
 }
@@ -588,8 +800,10 @@ async function renderChatRoute(brawlerId) {
     return;
   }
 
+  await ensureChatConfigLoaded();
+
   closeUserEvents();
-  const sessionId = clientId();
+  const sessionId = getOrCreateChatSessionId(brawler.id, userName);
   state.view = 'chat';
   state.chat = {
     sessionId,
@@ -604,6 +818,7 @@ async function renderChatRoute(brawlerId) {
     connected: false,
     loading: true,
     isThinking: false,
+    typingText: '',
     hasSentMessage: false,
     shouldStickToBottom: true,
     openReactionFor: '',
@@ -644,13 +859,21 @@ function openUserEvents(sessionId) {
   source.onopen = () => {
     if (!state.chat || state.chat.sessionId !== sessionId) return;
     state.chat.connected = true;
+    if (state.chat.notice === 'Conexão em tempo real instável. Tentando reconectar...') {
+      state.chat.notice = '';
+    }
     renderChat();
   };
 
   source.onerror = () => {
     if (!state.chat || state.chat.sessionId !== sessionId) return;
     state.chat.connected = false;
-    renderChat();
+    if (!state.chat.loading) {
+      state.chat.notice = state.chat.messages.length
+        ? 'Conexão em tempo real instável. Tentando reconectar...'
+        : (state.chat.notice || 'Falha ao abrir o chat em tempo real.');
+    }
+    renderChat({ preserveScroll: true, keepScrollTop: true });
   };
 
   source.addEventListener('message', (event) => {
@@ -667,6 +890,12 @@ function openUserEvents(sessionId) {
     const payload = JSON.parse(event.data);
     if (!state.chat) return;
     const nextThinking = Boolean(payload.typing && state.chat.hasSentMessage);
+    if (nextThinking && !state.chat.isThinking) {
+      state.chat.typingText = randomTypingText(state.chat.brawler.id);
+    }
+    if (!nextThinking) {
+      state.chat.typingText = '';
+    }
     if (state.chat.isThinking === nextThinking) return;
     state.chat.isThinking = nextThinking;
     renderChat({ keepScrollTop: true });
@@ -680,6 +909,7 @@ function appendChatMessage(message) {
   }
   if (message.type === 'brawler') {
     state.chat.isThinking = false;
+    state.chat.typingText = '';
   }
   renderChat();
 }
@@ -731,22 +961,38 @@ function renderChat(options = {}) {
   const visibleNotice = isRateLimited
     ? `Você está enviando mensagens muito rapidamente. Tente novamente em ${rateLimitRemaining}s.`
     : notice;
+  const showRetry = !loading && !connected;
+  const chatStatePanel = loading && !messages.length
+    ? renderEmptyState({
+      icon: '⏳',
+      title: 'Conectando ao chat',
+      description: 'Estamos preparando a conversa com o personagem.'
+    })
+    : (!messages.length && showRetry
+      ? renderEmptyState({
+        icon: '📡',
+        title: 'Não foi possível abrir o chat',
+        description: visibleNotice || 'Tente novamente agora.',
+        actionLabel: 'Tentar novamente',
+        actionAttr: 'data-chat-retry'
+      })
+      : '');
   app.innerHTML = `
     <div class="app chat">
       <header class="chat-header">
         <button class="icon-button" data-chat-back aria-label="Voltar">${icons.back}</button>
-        <div class="${avatarClass}" style="background-color:${escapeAttr(brawler.bgColor || '')};"><img src="${escapeAttr(brawler.image)}" alt="${escapeAttr(brawler.name)}" /></div>
+        <div class="${avatarClass}" style="background-color:${escapeAttr(brawler.bgColor || '')};"><img src="${escapeAttr(brawler.image)}" alt="Avatar de ${escapeAttr(brawler.name)}" /></div>
         <div class="chat-title">
           <h1>${escapeHtml(brawler.name)}</h1>
           <span class="online"><span class="dot"></span>${connected ? 'Online' : loading ? 'Conectando' : 'Reconectando'}</span>
         </div>
       </header>
       <main class="messages" data-messages>
-        ${messages.map((message) => renderChatMessage(message, brawler, userName)).join('')}
-        ${isThinking ? renderTyping(brawler) : ''}
+        ${chatStatePanel || `${messages.map((message) => renderChatMessage(message, brawler, userName)).join('')}${isThinking ? renderTyping(brawler) : ''}`}
       </main>
       <footer class="composer">
         ${visibleNotice ? `<div class="notice">${escapeHtml(visibleNotice)}</div>` : ''}
+        ${showRetry && messages.length ? '<div class="notice-actions"><button class="pill-button" type="button" data-chat-retry>Reconectar agora</button></div>' : ''}
         <div class="human-notice-inline">👁 Mensagens podem ser lidas por humanos</div>
         <form class="composer-form" data-chat-form>
           <label class="sr-only" for="chat-input">Mensagem</label>
@@ -833,11 +1079,12 @@ function renderReactions(messageId, reactions, userName) {
 }
 
 function renderTyping(brawler) {
+  const typingText = state.chat?.typingText || DEFAULT_CHAT_CONFIG.statusTexts[0];
   return `
     <div class="message-row brawler">
       <div class="message-avatar" style="background-color:${escapeAttr(brawler.bgColor || '')};"><img src="${escapeAttr(brawler.image)}" alt="${escapeAttr(brawler.name)}" /></div>
       <div class="typing">
-        <span>${escapeHtml(brawler.name)} está pensando</span>
+        <span>${escapeHtml(brawler.name)} ${escapeHtml(typingText)}</span>
         <span class="typing-dots"><span></span><span></span><span></span></span>
       </div>
     </div>
@@ -847,6 +1094,13 @@ function renderTyping(brawler) {
 function bindChat() {
   app.querySelector('[data-chat-back]')?.addEventListener('click', () => {
     navigateTo('/');
+  });
+
+  app.querySelectorAll('[data-chat-retry]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (!state.chat) return;
+      await renderChatRoute(state.chat.brawler.id);
+    });
   });
 
   const list = app.querySelector('[data-messages]');
@@ -859,7 +1113,7 @@ function bindChat() {
   const sendButton = app.querySelector('.send-button');
   textarea?.addEventListener('input', () => {
     state.chat.draft = textarea.value;
-    sendButton.disabled = !state.chat.connected || !textarea.value.trim();
+    sendButton.disabled = !state.chat.connected || !textarea.value.trim() || chatRateLimitRemaining() > 0 || state.chat.sending;
     textarea.style.height = 'auto';
     textarea.style.height = `${Math.min(textarea.scrollHeight, 128)}px`;
   });
@@ -920,6 +1174,7 @@ async function sendChatMessage() {
     state.chat.notice = '';
     state.chat.hasSentMessage = true;
     state.chat.isThinking = true;
+    state.chat.typingText = randomTypingText(state.chat.brawler.id);
     state.chat.sending = false;
     appendChatMessage(data.message);
   } catch (err) {
@@ -960,6 +1215,9 @@ function renderAdminRoute() {
     return;
   }
   startAdminClock();
+  if (!state.admin.started && !state.admin.conversations.length) {
+    state.admin.loadingConversations = true;
+  }
   renderAdmin();
   startAdmin();
 }
@@ -1005,17 +1263,52 @@ function startAdmin() {
   if (state.admin.started) return;
   state.admin.started = true;
   loadAdminConversations();
-  openAdminEvents();
+  void openAdminEvents();
   if (state.admin.tab === 'metrics') loadMetrics();
   if (state.admin.tab === 'mod') loadModeration();
 }
 
-function openAdminEvents() {
+async function openAdminEvents() {
   state.adminEvents?.close();
-  const source = new EventSource(`/api/events?role=admin&token=${encodeURIComponent(state.admin.token)}`);
+  clearTimeout(state.admin.reconnectTimer);
+  state.admin.reconnectTimer = 0;
+  let ticket = '';
+  try {
+    const data = await adminApi('/api/admin/events-ticket', { method: 'POST' });
+    ticket = data.ticket || '';
+  } catch {
+    scheduleAdminReconnect();
+    return;
+  }
+
+  if (!ticket) {
+    scheduleAdminReconnect();
+    return;
+  }
+
+  const source = new EventSource(`/api/events?role=admin&ticket=${encodeURIComponent(ticket)}`);
   state.adminEvents = source;
 
-  source.addEventListener('unauthorized', () => logoutAdmin());
+  source.onopen = () => {
+    clearTimeout(state.admin.reconnectTimer);
+    state.admin.reconnectTimer = 0;
+  };
+
+  source.onerror = () => {
+    if (state.adminEvents !== source || !state.admin.token) return;
+    source.close();
+    state.adminEvents = null;
+    state.admin.started = false;
+    scheduleAdminReconnect();
+  };
+
+  source.addEventListener('unauthorized', () => {
+    if (state.adminEvents !== source || !state.admin.token) return;
+    source.close();
+    state.adminEvents = null;
+    state.admin.started = false;
+    scheduleAdminReconnect();
+  });
   source.addEventListener('conversation-upsert', (event) => {
     const { conversation } = JSON.parse(event.data);
     upsertConversation(conversation);
@@ -1069,12 +1362,18 @@ function logoutAdmin() {
 }
 
 async function loadAdminConversations() {
+  state.admin.loadingConversations = true;
+  state.admin.conversationsError = '';
+  if (state.view === 'admin' && state.admin.tab === 'chats') renderAdmin();
   try {
     const data = await adminApi('/api/admin/conversations');
     state.admin.conversations = data.conversations || [];
+    state.admin.loadingConversations = false;
     if (state.view === 'admin') renderAdmin();
   } catch (err) {
-    showToast(err.message || 'Erro ao carregar conversas.', 'error');
+    state.admin.loadingConversations = false;
+    state.admin.conversationsError = err.message || 'Erro ao carregar conversas.';
+    if (state.view === 'admin') renderAdmin();
   }
 }
 
@@ -1119,6 +1418,10 @@ function renderAdmin(options = {}) {
     return;
   }
 
+  const conversationCountLabel = state.admin.loadingConversations
+    ? 'Carregando conversas...'
+    : `${state.admin.conversations.length} conversa${state.admin.conversations.length === 1 ? '' : 's'}`;
+
   const previousList = app.querySelector('.admin-main .messages');
   const previousScroll = previousList ? {
     top: previousList.scrollTop,
@@ -1144,7 +1447,7 @@ function renderAdmin(options = {}) {
             <button class="tab ${state.admin.tab === id ? 'active' : ''}" data-admin-tab="${id}">${label}</button>
           `).join('')}
         </nav>
-        <div class="conversation-count">${state.admin.conversations.length} conversa${state.admin.conversations.length === 1 ? '' : 's'}</div>
+        <div class="conversation-count">${conversationCountLabel}</div>
         <div class="conversation-list">
           ${state.admin.tab === 'chats' ? renderConversationList() : ''}
         </div>
@@ -1174,29 +1477,47 @@ function applyAdminScroll(options, previousScroll) {
 
 function renderConversationList() {
   const list = sortedConversations();
+  if (state.admin.loadingConversations && !list.length) {
+    return renderConversationSkeleton();
+  }
+  if (state.admin.conversationsError && !list.length) {
+    return renderEmptyState({
+      icon: '⚠️',
+      title: 'Falha ao carregar conversas',
+      description: state.admin.conversationsError,
+      actionLabel: 'Tentar novamente',
+      actionAttr: 'data-retry-conversations'
+    });
+  }
   if (!list.length) {
-    return '<div class="empty-state">Nenhuma conversa ativa.</div>';
+    return renderEmptyState({
+      icon: '💬',
+      title: 'Nenhuma conversa ativa',
+      description: 'Quando um visitante iniciar um chat, ele aparecerá aqui automaticamente.'
+    });
   }
   return list.map((conv) => {
     const brawler = getBrawler(conv.brawler?.id);
     const wait = waitInfo(conv.waitingSince);
     const active = conv.id === state.admin.activeConvId;
     return `
-      <button class="conversation-item ${active ? 'active' : ''} ${wait?.level || ''}" data-select-conv="${escapeAttr(conv.id)}">
-        <span class="conversation-avatar" style="${brawler ? `background-color:${escapeAttr(brawler.bgColor || '')};` : ''}">${brawler ? `<img src="${escapeAttr(brawler.image)}" alt="${escapeAttr(brawler.name)}" />` : ''}</span>
-        <span class="conversation-main">
-          <span class="conversation-title">
-            ${conv.pinned ? '<span title="Fixado">📌</span>' : ''}
-            <span class="truncate">${escapeHtml(conv.userName)}</span>
+      <div class="conversation-row ${active ? 'active' : ''}">
+        <button class="conversation-item ${active ? 'active' : ''} ${wait?.level || ''}" type="button" data-select-conv="${escapeAttr(conv.id)}">
+          <span class="conversation-avatar" style="${brawler ? `background-color:${escapeAttr(brawler.bgColor || '')};` : ''}">${brawler ? `<img src="${escapeAttr(brawler.image)}" alt="Avatar de ${escapeAttr(brawler.name)}" />` : ''}</span>
+          <span class="conversation-main">
+            <span class="conversation-title">
+              ${conv.pinned ? '<span title="Fixado">📌</span>' : ''}
+              <span class="truncate">${escapeHtml(conv.userName)}</span>
+            </span>
+            <span class="conversation-preview truncate">${escapeHtml(conv.brawler?.name || '')}${conv.lastMessage ? ` · ${escapeHtml(conv.lastMessage.text)}` : ''}</span>
           </span>
-          <span class="conversation-preview truncate">${escapeHtml(conv.brawler?.name || '')}${conv.lastMessage ? ` · ${escapeHtml(conv.lastMessage.text)}` : ''}</span>
-        </span>
-        <span class="conversation-meta">
-          ${wait ? `<span class="badge wait-badge ${wait.level}">${wait.label}</span>` : ''}
-          ${conv.unread ? `<span class="badge unread-badge">${conv.unread > 9 ? '9+' : conv.unread}</span>` : `<span class="soft">${formatTime(conv.lastMessage?.timestamp || conv.createdAt)}</span>`}
-          <span class="icon-button" data-pin-conv="${escapeAttr(conv.id)}" title="${conv.pinned ? 'Desafixar' : 'Fixar'}">${icons.pin}</span>
-        </span>
-      </button>
+          <span class="conversation-meta">
+            ${wait ? `<span class="badge wait-badge ${wait.level}">${wait.label}</span>` : ''}
+            ${conv.unread ? `<span class="badge unread-badge">${conv.unread > 9 ? '9+' : conv.unread}</span>` : `<span class="soft">${formatTime(conv.lastMessage?.timestamp || conv.createdAt)}</span>`}
+          </span>
+        </button>
+        <button class="icon-button conversation-pin ${conv.pinned ? 'is-pinned' : ''}" type="button" data-pin-conv="${escapeAttr(conv.id)}" title="${conv.pinned ? 'Desafixar conversa' : 'Fixar conversa'}" aria-label="${conv.pinned ? 'Desafixar conversa' : 'Fixar conversa'}">${icons.pin}</button>
+      </div>
     `;
   }).join('');
 }
@@ -1205,24 +1526,46 @@ function renderAdminMain() {
   if (state.admin.tab === 'metrics') return renderMetricsView();
   if (state.admin.tab === 'mod') return renderModerationView();
 
+  if (state.admin.loadingConversations && !state.admin.conversations.length) {
+    return `<main class="admin-main"><section class="messages">${renderMessageSkeleton()}</section></main>`;
+  }
+
   const activeId = state.admin.activeConvId;
   const conv = state.admin.conversations.find((item) => item.id === activeId);
   const detail = state.admin.details[activeId];
   if (!activeId || !conv) {
-    return '<main class="admin-main"><div class="empty-state"><div><h2>Selecione uma conversa</h2><p>As mensagens aparecerão aqui.</p></div></div></main>';
+    return `<main class="admin-main">${renderEmptyState({
+      icon: state.admin.conversations.length ? '👉' : '💤',
+      title: state.admin.conversations.length ? 'Selecione uma conversa' : 'Painel aguardando visitantes',
+      description: state.admin.conversations.length ? 'Abra uma conversa na lista para responder em tempo real.' : 'Quando um visitante iniciar um chat, ele aparecerá aqui com atualização automática.'
+    })}</main>`;
   }
   const brawler = getBrawler(conv.brawler?.id);
+  const isDetailLoading = state.admin.detailLoadingId === activeId;
+  const hasDetailError = state.admin.detailError.convId === activeId;
   return `
     <main class="admin-main">
       <header class="admin-chat-head">
-        <span class="conversation-avatar" style="${brawler ? `background-color:${escapeAttr(brawler.bgColor || '')};` : ''}">${brawler ? `<img src="${escapeAttr(brawler.image)}" alt="${escapeAttr(brawler.name)}" />` : ''}</span>
+        <span class="conversation-avatar" style="${brawler ? `background-color:${escapeAttr(brawler.bgColor || '')};` : ''}">${brawler ? `<img src="${escapeAttr(brawler.image)}" alt="Avatar de ${escapeAttr(brawler.name)}" />` : ''}</span>
         <div>
           <strong>${escapeHtml(conv.userName)}</strong>
           <div class="muted">conversando com ${escapeHtml(conv.brawler?.name || '')}</div>
         </div>
       </header>
       <section class="messages">
-        ${detail ? detail.messages.map((message) => renderAdminMessage(message, conv)).join('') : '<div class="empty-state">Carregando histórico...</div>'}
+        ${isDetailLoading
+          ? renderMessageSkeleton()
+          : hasDetailError
+            ? renderEmptyState({
+              icon: '⚠️',
+              title: 'Não foi possível abrir a conversa',
+              description: state.admin.detailError.message,
+              actionLabel: 'Tentar novamente',
+              actionAttr: 'data-retry-detail'
+            })
+            : detail
+              ? detail.messages.map((message) => renderAdminMessage(message, conv)).join('')
+              : renderMessageSkeleton(3)}
       </section>
       <footer class="composer">
         <form class="composer-form" data-admin-reply-form>
@@ -1281,8 +1624,7 @@ function bindAdmin() {
   });
 
   app.querySelectorAll('[data-select-conv]').forEach((button) => {
-    button.addEventListener('click', async (event) => {
-      if (event.target.closest('[data-pin-conv]')) return;
+    button.addEventListener('click', async () => {
       await selectConversation(button.dataset.selectConv);
     });
   });
@@ -1322,6 +1664,12 @@ function bindAdmin() {
 
   app.querySelector('[data-refresh-metrics]')?.addEventListener('click', loadMetrics);
   app.querySelector('[data-reset-metrics]')?.addEventListener('click', resetMetrics);
+  app.querySelector('[data-retry-conversations]')?.addEventListener('click', loadAdminConversations);
+  app.querySelector('[data-retry-detail]')?.addEventListener('click', async () => {
+    if (state.admin.activeConvId) await selectConversation(state.admin.activeConvId);
+  });
+  app.querySelector('[data-retry-metrics]')?.addEventListener('click', loadMetrics);
+  app.querySelector('[data-retry-moderation]')?.addEventListener('click', loadModeration);
 
   app.querySelector('[data-word-form]')?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -1345,21 +1693,31 @@ async function selectConversation(convId) {
   state.admin.activeConvId = convId;
   state.admin.replyDraft = '';
   state.admin.shouldStickToBottom = true;
+  state.admin.detailLoadingId = '';
+  state.admin.detailError = { convId: '', message: '' };
   const conv = state.admin.conversations.find((item) => item.id === convId);
   if (conv) conv.unread = 0;
   renderAdmin({ scrollToBottom: true });
   try {
     await adminApi(`/api/admin/conversations/${encodeURIComponent(convId)}/read`, { method: 'POST' });
     if (!state.admin.details[convId]) {
+      state.admin.detailLoadingId = convId;
+      renderAdmin({ scrollToBottom: true });
       const data = await adminApi(`/api/admin/conversations/${encodeURIComponent(convId)}`);
       state.admin.details[convId] = {
         conversation: data.conversation,
         messages: data.messages || []
       };
     }
+    state.admin.detailLoadingId = '';
     renderAdmin({ scrollToBottom: true });
   } catch (err) {
-    showToast(err.message || 'Erro ao abrir conversa.', 'error');
+    state.admin.detailLoadingId = '';
+    state.admin.detailError = {
+      convId,
+      message: err.message || 'Erro ao abrir conversa.'
+    };
+    renderAdmin({ scrollToBottom: true });
   }
 }
 
@@ -1410,17 +1768,23 @@ async function sendAdminReply() {
 }
 
 async function loadMetrics() {
+  state.admin.metricsLoading = true;
+  state.admin.metricsError = '';
+  if (state.view === 'admin' && state.admin.tab === 'metrics') renderAdmin();
   try {
     state.admin.metrics = await adminApi('/api/admin/metrics');
+    state.admin.metricsLoading = false;
     if (state.view === 'admin' && state.admin.tab === 'metrics') renderAdmin();
   } catch (err) {
-    showToast(err.message || 'Erro ao carregar métricas.', 'error');
+    state.admin.metricsLoading = false;
+    state.admin.metricsError = err.message || 'Erro ao carregar métricas.';
+    if (state.view === 'admin' && state.admin.tab === 'metrics') renderAdmin();
   }
 }
 
 function renderMetricsView() {
   const data = state.admin.metrics;
-  if (!data) {
+  if (!data && state.admin.metricsLoading) {
     return `
       <main class="admin-main">
         <section class="metrics">
@@ -1428,7 +1792,27 @@ function renderMetricsView() {
             <h2>Métricas</h2>
             <button class="icon-button" data-refresh-metrics aria-label="Atualizar">${icons.refresh}</button>
           </div>
-          <div class="empty-state">Carregando métricas...</div>
+          ${renderMetricSkeleton()}
+        </section>
+      </main>
+    `;
+  }
+
+  if (!data && state.admin.metricsError) {
+    return `
+      <main class="admin-main">
+        <section class="metrics">
+          <div class="view-head">
+            <h2>Métricas</h2>
+            <button class="icon-button" data-refresh-metrics aria-label="Atualizar">${icons.refresh}</button>
+          </div>
+          ${renderEmptyState({
+            icon: '⚠️',
+            title: 'Falha ao carregar métricas',
+            description: state.admin.metricsError,
+            actionLabel: 'Tentar novamente',
+            actionAttr: 'data-retry-metrics'
+          })}
         </section>
       </main>
     `;
@@ -1491,6 +1875,9 @@ async function resetMetrics() {
 }
 
 async function loadModeration() {
+  state.admin.moderationLoading = true;
+  state.admin.moderationError = '';
+  if (state.view === 'admin' && state.admin.tab === 'mod') renderAdmin();
   try {
     const [words, terms, settings] = await Promise.all([
       adminApi('/api/admin/word-filter'),
@@ -1502,16 +1889,29 @@ async function loadModeration() {
       terms: terms.terms || [],
       settings
     };
+    state.admin.moderationLoading = false;
     if (state.view === 'admin' && state.admin.tab === 'mod') renderAdmin();
   } catch (err) {
-    showToast(err.message || 'Erro ao carregar moderação.', 'error');
+    state.admin.moderationLoading = false;
+    state.admin.moderationError = err.message || 'Erro ao carregar moderação.';
+    if (state.view === 'admin' && state.admin.tab === 'mod') renderAdmin();
   }
 }
 
 function renderModerationView() {
   const data = state.admin.moderation;
-  if (!data) {
-    return '<main class="admin-main"><section class="moderation"><div class="empty-state">Carregando moderação...</div></section></main>';
+  if (!data && state.admin.moderationLoading) {
+    return `<main class="admin-main"><section class="moderation">${renderModerationSkeleton()}</section></main>`;
+  }
+
+  if (!data && state.admin.moderationError) {
+    return `<main class="admin-main"><section class="moderation">${renderEmptyState({
+      icon: '⚠️',
+      title: 'Falha ao carregar moderação',
+      description: state.admin.moderationError,
+      actionLabel: 'Tentar novamente',
+      actionAttr: 'data-retry-moderation'
+    })}</section></main>`;
   }
 
   return `
@@ -1613,6 +2013,7 @@ async function saveSettings() {
 window.addEventListener('hashchange', route);
 window.addEventListener('popstate', route);
 purgeLegacyChatStorage();
+void ensureChatConfigLoaded();
 
 (function injectHumanNoticeBadge() {
   if (document.querySelector('.human-notice-badge')) return;

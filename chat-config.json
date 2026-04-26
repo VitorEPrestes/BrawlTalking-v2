@@ -1,0 +1,164 @@
+{
+  "default": {
+    "welcomeMessages": [
+      "Ola, {userName}! Voce esta conversando com {brawlerName}. Como posso te ajudar hoje?"
+    ],
+    "statusTexts": [
+      "esta pensando"
+    ]
+  },
+  "brawlers": {
+    "spike": {
+      "welcomeMessages": [
+        "..."
+      ],
+      "statusTexts": [
+        "está pensando",
+        "..."
+      ]
+    },
+    "colt": {
+      "welcomeMessages": [
+        "Olá, {userName}! Vem sempre aqui?",
+        "Ah... Não consigo achar a Shelly, o Spike não diz nada.",
+        "Você viu a Shelly por aí, {userName}?",
+        "Sou lindo. Ah, oi {userName}, não te vi chegar.",
+        "É difícil definir a personalidade do Colt."
+      ],
+      "statusTexts": [
+        "está pensando",
+        "está polindo os revólveres",
+        "está treinando a mira",
+        "está mirando em você",
+        "está escolhendo a melhor entrada dramática",
+        "está ensaiando uma pose",
+        "está ajeitando o cabelo"
+      ]
+    },
+    "shelly": {
+      "welcomeMessages": [
+        "Hahaha, {userName}! Shelly por aqui. Como posso ajudar?.",
+        "{userName}, você chamou a {brawlerName}. Asy me gusta!"
+      ],
+      "statusTexts": [
+        "está pensando",
+        "está recarregando a escopeta",
+        "está de olho no caminho",
+        "está na moita",
+        "está fazendo carinho no Kit",
+        "está pensando em algo pra escrever aqui"
+      ]
+    },
+    "bull": {
+      "welcomeMessages": [
+        "{userName}! Bull chegou. Vê se não me faz perder tempo.",
+        "Grrrrr"
+      ],
+      "statusTexts": [
+        "está bravo",
+        "está bufando de impaciência",
+        "está aquecendo para a pancadaria",
+        "está encarando um pano vermelho imaginário",
+        "está soltando fumaça?!?!",
+        "está pensando?"
+      ]
+    },
+    "brock": {
+      "welcomeMessages": [
+        "Yo yo yo, {userName}! Brock na área. Sente o batidão ooooh!",
+        "{userName}, se prepara pra ouvir barras!"
+      ],
+      "statusTexts": [
+        "está pensando",
+        "está calibrando o foguete",
+        "está escolhendo a melhor musica",
+        "está dançando um pouco",
+        "está dançando um pouco mais",
+        "está dançando um pouco mais ainda",
+        "está dançando até cansar"
+      ]
+    },
+    "el-primo": {
+      "welcomeMessages": [
+        "Ay {userName}! Soy el mejor!",
+        "EEEELLLL PRIMOOOOOOO!"
+      ],
+      "statusTexts": [
+        "está pensando",
+        "está alongando para um salto heroico",
+        "está ensaiando uma pose de campeão",
+        "está te socando",
+        "está flexionando os músculos",
+        "está tirando a máscara"
+      ]
+    },
+    "angelo": {
+      "welcomeMessages": [
+        "Ah! {userName}... você está servindo com esse visual! ( cruzes... servindo vergonha ).",
+        "{userName}, Angelo está aqui, já pode aplaudir.",
+        "Babado fortissimo, {userName}!",
+        "Já fala, {userName}, que eu já estou preparando o look do dia.",
+        "O que você quer, {userName}? Já estou me arrumando aqui.",
+        "Cadê a Willow? queria que ela ouvisse essa fofoca.",
+        "Oh... {userName}, você é tão estiloso!",
+        "Minha nossa... {userName}, você é um arraso!"
+      ],
+      "statusTexts": [
+        "está pensando",
+        "está servindo",
+        "está lacrando",
+        "está arrasando",
+        "está causando",
+        "está dando close",
+        "está se arrumando",
+        "está voando por ai",
+        "está mirando em você"
+      ]
+    },
+    "mina": {
+      "welcomeMessages": [
+        "Oi, {userName}! Mina por aqui. Vamos conversar do seu jeito.",
+        "{userName}, sabe dançar?",
+        "Fala tu, {userName}, que eu já estou preparando a pista de dança.",
+        "Mina ouviu você, {userName}. Fale e eu respondo.",
+        "[INSIRA REFERENCIA AO BRASIL], {userName}!",
+        "Futebol! Gooool! Brazil coxinha capybara!"
+      ],
+      "statusTexts": [
+        "está pensando",
+        "está dançando",
+        "está medindo as palavras",
+        "está ouvindo o ritmo do seu coração",
+        "está cantando rap",
+        "está cantando funk",
+        "está te desafiando para dançar"
+
+      ]
+    },
+    "jessie": {
+      "welcomeMessages": [
+        "Oi, {userName}! Jessie aqui.",
+        "{userName}, chamou a {brawlerName}? Então bora!"
+      ],
+      "statusTexts": [
+        "está pensando",
+        "está mexendo na sucata",
+        "está ajustando a torreta"
+      ]
+    },
+    "nita": {
+      "welcomeMessages": [
+        "Nitaa",
+        "Arrrggh!"
+      ],
+      "statusTexts": [
+        "está pensando...?",
+        "está ouvindo o vento",
+        "está chamando o urso para opinar",
+        "está gritando",
+        "está comendo terra e pedra",
+        "quer te morder"
+          ]
+    }
+  }
+}
