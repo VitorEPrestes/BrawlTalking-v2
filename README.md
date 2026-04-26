@@ -2,14 +2,17 @@
 
 Repositório local sincronizado com https://github.com/VitorEPrestes/BrawlTalking-v2
 
-Projeto de chat/local frontend para BrawlTalking.
+Projeto de chat em tempo real para BrawlTalking, com frontend ativo em JavaScript puro e painel administrativo integrado.
 
 Estrutura principal:
-- `BrawlTalking/` — frontend React
-- `public/` — arquivos estáticos (`app.js`, `index.html`, `styles.css`)
+- `server.js` — servidor HTTP, API, SSE e regras de moderação
+- `public/` — frontend ativo (`app.js`, `index.html`, `styles.css`, `brawlers.json`)
+- `chat-config.json` — mensagens iniciais e textos de digitação por personagem
 - `moderation-config.json` — persistência dos filtros e configurações de moderação do painel admin
+- `BrawlTalking/frontend/` — arquivos React legados de referência, não usados pelo servidor atual
+- `tests/` — smoke tests e validações básicas de configuração
 
-Como rodar (exemplo básico):
+Como rodar:
 
 1. Instale dependências:
 
@@ -17,10 +20,17 @@ Como rodar (exemplo básico):
 npm install
 ```
 
-2. Inicie a aplicação:
+2. Valide sintaxe e testes:
 
 ```bash
-node server.js
+npm run check
+npm test
+```
+
+3. Inicie a aplicação:
+
+```bash
+npm start
 ```
 
 Variáveis de ambiente recomendadas:
@@ -28,7 +38,16 @@ Variáveis de ambiente recomendadas:
 - `ADMIN_PASSWORD`: senha do painel administrativo.
 - `TOKEN_SECRET`: segredo usado para assinar tokens de autenticação.
 
-Em produção (`NODE_ENV=production`), o servidor exige `ADMIN_PASSWORD` e `TOKEN_SECRET` definidos com valores fortes.
+Qualquer ambiente fora de `development` exige `ADMIN_PASSWORD` e `TOKEN_SECRET` definidos com valores fortes, diferentes dos padrões locais.
+
+Melhorias implementadas nesta versão:
+
+- catálogo de personagens centralizado em `public/brawlers.json`
+- sessão de usuário endurecida com `sessionSecret` e `streamToken`
+- home com busca por personagem
+- onboarding com consentimento explícito
+- feedback melhor no chat e mais resiliência a falhas de API
+- cache de assets versionados em produção
 
 Persistência de moderação:
 

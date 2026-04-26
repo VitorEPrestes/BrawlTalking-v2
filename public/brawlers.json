@@ -1,0 +1,72 @@
+[
+  {
+    "id": "spike",
+    "name": "Spike",
+    "tagline": "...",
+    "image": "/portraits/spike_portrait.png",
+    "bgColor": "#f5c800"
+  },
+  {
+    "id": "colt",
+    "name": "Colt",
+    "tagline": "Beldade.",
+    "image": "/portraits/colt_portrait.png",
+    "bgColor": "#1a3a6b"
+  },
+  {
+    "id": "shelly",
+    "name": "Shelly",
+    "tagline": "Bling bling.",
+    "image": "/portraits/Shelly_portrait.png",
+    "bgColor": "#a8d8ea"
+  },
+  {
+    "id": "bull",
+    "name": "Bull",
+    "tagline": "Bull bravo.",
+    "image": "/portraits/bull_portrait.png",
+    "bgColor": "#1a5c2a"
+  },
+  {
+    "id": "brock",
+    "name": "Brock",
+    "tagline": "Faz o L.",
+    "image": "/portraits/brock_portrait.png",
+    "bgColor": "#1a5c2a"
+  },
+  {
+    "id": "el-primo",
+    "name": "El Primo",
+    "tagline": "EEELLL PRIMOOOO.",
+    "image": "/portraits/elprimo_portrait.png",
+    "bgColor": "#1a5c2a"
+  },
+  {
+    "id": "angelo",
+    "name": "Angelo",
+    "tagline": "Eu sou o Drama.",
+    "image": "/portraits/angelo_portrait.png",
+    "bgColor": "#4a1a7a"
+  },
+  {
+    "id": "mina",
+    "name": "Mina",
+    "tagline": "Nascida em São Paulo.",
+    "image": "/portraits/Mina_portrait.png",
+    "bgColor": "#7a1a1a"
+  },
+  {
+    "id": "jessie",
+    "name": "Jessie",
+    "tagline": "Diz oi pro meu amiguinho.",
+    "image": "/portraits/jessie_portrait.png",
+    "bgColor": "#1a3a6b"
+  },
+  {
+    "id": "nita",
+    "name": "Nita",
+    "tagline": "NITAAAA.",
+    "image": "/portraits/nita_portrait.png",
+    "bgColor": "#1a5c2a"
+  }
+]

@@ -15,6 +15,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const PRIMARY_PORTRAITS_DIR = path.join(__dirname, 'Portraits');
 const LEGACY_PORTRAITS_DIR = path.join(__dirname, 'BrawlTalking', 'portraits');
 const PORTRAITS_DIR = fs.existsSync(PRIMARY_PORTRAITS_DIR) ? PRIMARY_PORTRAITS_DIR : LEGACY_PORTRAITS_DIR;
+const BRAWLERS_PATH = path.join(PUBLIC_DIR, 'brawlers.json');
 const CHAT_CONFIG_PATH = path.join(__dirname, 'chat-config.json');
 const MODERATION_CONFIG_PATH = path.join(__dirname, 'moderation-config.json');
 
@@ -25,18 +26,7 @@ const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 const ADMIN_STREAM_TICKET_TTL_MS = 2 * 60 * 1000;
 const CONVERSATION_RETENTION_MS = 10 * 60 * 1000;
 
-const brawlers = [
-  { id: 'spike', name: 'Spike', image: 'spike_portrait.png' },
-  { id: 'colt', name: 'Colt', image: 'colt_portrait.png' },
-  { id: 'shelly', name: 'Shelly', image: 'Shelly_portrait.png' },
-  { id: 'bull', name: 'Bull', image: 'bull_portrait.png' },
-  { id: 'brock', name: 'Brock', image: 'brock_portrait.png' },
-  { id: 'el-primo', name: 'El Primo', image: 'elprimo_portrait.png' },
-  { id: 'angelo', name: 'Angelo', image: 'angelo_portrait.png' },
-  { id: 'mina', name: 'Mina', image: 'Mina_portrait.png' },
-  { id: 'jessie', name: 'Jessie', image: 'jessie_portrait.png' },
-  { id: 'nita', name: 'Nita', image: 'nita_portrait.png' }
-];
+const brawlers = loadBrawlers();
 
 const conversations = new Map();
 const rankingCounts = new Map();
@@ -99,6 +89,11 @@ const DEFAULT_MODERATION_CONFIG = {
 };
 
 const initialModerationConfig = readModerationConfig();
+let chatConfigCache = loadChatConfigFromDisk();
+
+fs.watchFile(CHAT_CONFIG_PATH, { persistent: false, interval: 2000 }, () => {
+  chatConfigCache = loadChatConfigFromDisk();
+});
 
 let profanityWords = new Set(initialModerationConfig.words);
 let nicknameBlacklist = new Set(initialModerationConfig.nicknameBlacklist);
@@ -109,13 +104,44 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function readChatConfig() {
+function loadBrawlers() {
+  const raw = fs.readFileSync(BRAWLERS_PATH, 'utf8');
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed) || !parsed.length) {
+    throw new Error('Catálogo de brawlers inválido. Verifique public/brawlers.json.');
+  }
+
+  const normalized = parsed
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const id = sanitizeText(item.id, 40);
+      const name = sanitizeText(item.name, 60);
+      const image = sanitizeSecret(item.image, 200);
+      const tagline = sanitizeText(item.tagline, 120);
+      const bgColor = sanitizeSecret(item.bgColor, 40);
+      if (!id || !name || !image) return null;
+      return { id, name, image, tagline, bgColor };
+    })
+    .filter(Boolean);
+
+  if (!normalized.length) {
+    throw new Error('Nenhum brawler válido foi encontrado em public/brawlers.json.');
+  }
+
+  return normalized;
+}
+
+function loadChatConfigFromDisk() {
   try {
     const raw = fs.readFileSync(CHAT_CONFIG_PATH, 'utf8');
     return JSON.parse(raw);
   } catch {
     return { default: DEFAULT_CHAT_CONFIG, brawlers: {} };
   }
+}
+
+function readChatConfig() {
+  return chatConfigCache;
 }
 
 function resolveChatConfig(brawlerId) {
@@ -176,6 +202,10 @@ function sanitizeMessageText(value, max = 1000) {
     .replace(/[ \t]+/g, ' ')
     .trim()
     .slice(0, max);
+}
+
+function sanitizeSecret(value, max = 200) {
+  return String(value || '').trim().slice(0, max);
 }
 
 function sanitizeModerationEntries(values) {
@@ -411,6 +441,12 @@ function requireAdmin(req, res) {
   if (verifyToken(getAuthToken(req))) return true;
   sendJson(res, 401, { error: 'Unauthorized.' });
   return false;
+}
+
+function verifyUserSession(sessionId, sessionSecret) {
+  const conv = conversations.get(sessionId);
+  if (!conv || !sessionSecret || !safeEqual(conv.sessionSecret || '', sessionSecret)) return null;
+  return conv;
 }
 
 function conversationSummary(conv) {
@@ -704,8 +740,9 @@ async function handleApi(req, res, url) {
     const userName = sanitizeText(body.userName, 30);
     const brawler = compactBrawler(body.brawler);
     const sessionId = sanitizeText(body.sessionId, 120);
+    const sessionSecret = sanitizeSecret(body.sessionSecret, 200);
 
-    if (!userName || !brawler || !sessionId) {
+    if (!userName || !brawler || !sessionId || !sessionSecret) {
       return sendJson(res, 400, { error: 'Dados da conversa inválidos.' });
     }
     if (isNicknameBlocked(userName)) {
@@ -717,6 +754,15 @@ async function handleApi(req, res, url) {
     if (isReturn) metrics.returnJoins += 1;
 
     let conv = conversations.get(sessionId);
+    if (conv) {
+      const sameUser = safeEqual(conv.sessionSecret || '', sessionSecret);
+      const sameProfile = safeEqual(conv.userName || '', userName) && conv.brawler?.id === brawler.id;
+      if (!sameUser || !sameProfile) {
+        return sendJson(res, 403, { error: 'Sessão de conversa inválida. Abra o chat novamente.' });
+      }
+      if (!conv.streamToken) conv.streamToken = generateId('stream');
+    }
+
     if (!conv) {
       const welcome = {
         id: generateId('msg'),
@@ -730,6 +776,8 @@ async function handleApi(req, res, url) {
         id: sessionId,
         userName,
         brawler,
+        sessionSecret,
+        streamToken: generateId('stream'),
         messages: [welcome],
         unread: 0,
         createdAt: nowIso(),
@@ -747,16 +795,29 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, {
       conversation: conversationSummary(conv),
       messages: conv.messages,
-      isReturn
+      isReturn,
+      streamToken: conv.streamToken
     });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/user/events-ticket') {
+    const body = await readJson(req);
+    const sessionId = sanitizeText(body.sessionId, 120);
+    const sessionSecret = sanitizeSecret(body.sessionSecret, 200);
+    const conv = verifyUserSession(sessionId, sessionSecret);
+    if (!conv) return sendJson(res, 403, { error: 'Sessão de conversa inválida.' });
+    if (!conv.streamToken) conv.streamToken = generateId('stream');
+    return sendJson(res, 200, { streamToken: conv.streamToken });
   }
 
   if (req.method === 'POST' && pathname === '/api/user/message') {
     const body = await readJson(req);
     const convId = sanitizeText(body.sessionId, 120);
-    const conv = conversations.get(convId);
+    const sessionSecret = sanitizeSecret(body.sessionSecret, 200);
+    const conv = verifyUserSession(convId, sessionSecret);
     const text = sanitizeMessageText(body.text, 1000);
-    if (!conv || !text) return sendJson(res, 400, { error: 'Mensagem inválida.' });
+    if (!conv) return sendJson(res, 403, { error: 'Sessão de conversa inválida.' });
+    if (!text) return sendJson(res, 400, { error: 'Mensagem inválida.' });
 
     const limit = checkMessageLimit(convId);
     if (!limit.allowed) {
@@ -802,12 +863,14 @@ async function handleApi(req, res, url) {
   if (req.method === 'POST' && pathname === '/api/user/reaction') {
     const body = await readJson(req);
     const convId = sanitizeText(body.sessionId, 120);
+    const sessionSecret = sanitizeSecret(body.sessionSecret, 200);
     const msgId = sanitizeText(body.messageId, 80);
     const emoji = String(body.emoji || '');
     const userName = sanitizeText(body.userName, 30) || 'visitante';
     const allowed = ['⭐', '🔥', '💥', '😂', '👊', '🌵'];
-    const conv = conversations.get(convId);
-    if (!conv || !msgId || !allowed.includes(emoji)) return sendJson(res, 400, { error: 'Reação inválida.' });
+    const conv = verifyUserSession(convId, sessionSecret);
+    if (!conv) return sendJson(res, 403, { error: 'Sessão de conversa inválida.' });
+    if (!msgId || !allowed.includes(emoji)) return sendJson(res, 400, { error: 'Reação inválida.' });
 
     const message = conv.messages.find((item) => item.id === msgId);
     if (!message || message.type !== 'brawler') {
@@ -1039,7 +1102,9 @@ function handleEvents(req, res, searchParams) {
 
   if (role === 'user') {
     const convId = sanitizeText(searchParams.get('sessionId'), 120);
-    if (!convId || !conversations.has(convId)) {
+    const streamToken = sanitizeSecret(searchParams.get('streamToken'), 120);
+    const conv = conversations.get(convId);
+    if (!convId || !conv || !streamToken || !safeEqual(conv.streamToken || '', streamToken)) {
       writeEvent(res, 'not-found', { error: 'Conversa não encontrada.' });
       res.end();
       clearInterval(ping);
@@ -1081,15 +1146,25 @@ function mimeType(filePath) {
   }[ext] || 'application/octet-stream';
 }
 
-function cacheHeaders(filePath) {
+function cacheHeaders(filePath, url) {
   const ext = path.extname(filePath).toLowerCase();
-  if (['.html', '.css', '.js'].includes(ext)) {
+  if (ext === '.html') {
     return {
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
       Pragma: 'no-cache',
       Expires: '0'
     };
   }
+
+  const hasVersion = url.searchParams.has('v');
+  if (hasVersion && ['.css', '.js'].includes(ext)) {
+    return { 'Cache-Control': 'public, max-age=31536000, immutable' };
+  }
+
+  if (['.css', '.js', '.json'].includes(ext)) {
+    return { 'Cache-Control': 'public, max-age=300, stale-while-revalidate=60' };
+  }
+
   return { 'Cache-Control': 'public, max-age=3600' };
 }
 
@@ -1134,7 +1209,7 @@ function serveStatic(req, res, url) {
       res.writeHead(200, {
         ...baseSecurityHeaders(),
         'Content-Type': mimeType(target),
-        ...cacheHeaders(target)
+        ...cacheHeaders(target, url)
       });
       res.end(data);
     });
@@ -1159,9 +1234,9 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-if (NODE_ENV === 'production') {
+if (NODE_ENV !== 'development') {
   if (ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD || TOKEN_SECRET === DEFAULT_TOKEN_SECRET) {
-    throw new Error('Defina ADMIN_PASSWORD e TOKEN_SECRET no ambiente de produção antes de iniciar o servidor.');
+    throw new Error('Defina ADMIN_PASSWORD e TOKEN_SECRET fora dos valores padrão antes de iniciar o servidor.');
   }
 }
 
@@ -1176,9 +1251,11 @@ process.on('uncaughtException', (error) => {
 });
 
 server.listen(PORT, HOST, () => {
+  const address = server.address();
+  const actualPort = typeof address === 'object' && address ? address.port : PORT;
   const displayHost = HOST === '0.0.0.0' ? 'localhost' : HOST;
-  console.log(`BrawlTalkie Reborn rodando em http://${displayHost}:${PORT}`);
-  console.log(`Painel admin: http://${displayHost}:${PORT}/admin`);
+  console.log(`BrawlTalkie Reborn rodando em http://${displayHost}:${actualPort}`);
+  console.log(`Painel admin: http://${displayHost}:${actualPort}/admin`);
   if (NODE_ENV !== 'production' && ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD) {
     console.warn('Aviso: usando senha admin default em ambiente de desenvolvimento.');
   }

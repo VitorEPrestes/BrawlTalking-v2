@@ -12,81 +12,12 @@ const SESSION = {
 
 const REACTIONS = ['⭐', '🔥', '💥', '😂', '👊', '🌵'];
 
-const brawlers = [
-  {
-    id: 'spike',
-    name: 'Spike',
-    tagline: '...',
-    image: '/portraits/spike_portrait.png',
-    bgColor: '#f5c800'
-  },
-  {
-    id: 'colt',
-    name: 'Colt',
-    tagline: 'Beldade.',
-    image: '/portraits/colt_portrait.png',
-    bgColor: '#1a3a6b'
-  },
-  {
-    id: 'shelly',
-    name: 'Shelly',
-    tagline: 'Bling bling.',
-    image: '/portraits/Shelly_portrait.png',
-    bgColor: '#a8d8ea'
-  },
-  {
-    id: 'bull',
-    name: 'Bull',
-    tagline: 'Bull bravo.',
-    image: '/portraits/bull_portrait.png',
-    bgColor: '#1a5c2a'
-  },
-  {
-    id: 'brock',
-    name: 'Brock',
-    tagline: 'Faz o L.',
-    image: '/portraits/brock_portrait.png',
-    bgColor: '#1a5c2a'
-  },
-  {
-    id: 'el-primo',
-    name: 'El Primo',
-    tagline: 'EEELLL PRIMOOOO.',
-    image: '/portraits/elprimo_portrait.png',
-    bgColor: '#1a5c2a'
-  },
-  {
-    id: 'angelo',
-    name: 'Angelo',
-    tagline: 'Eu sou o Drama.',
-    image: '/portraits/angelo_portrait.png',
-    bgColor: '#4a1a7a'
-  },
-  {
-    id: 'mina',
-    name: 'Mina',
-    tagline: 'Nascida em São Paulo.',
-    image: '/portraits/Mina_portrait.png',
-    bgColor: '#7a1a1a'
-  },
-  {
-    id: 'jessie',
-    name: 'Jessie',
-    tagline: 'Diz oi pro meu amiguinho.',
-    image: '/portraits/jessie_portrait.png',
-    bgColor: '#1a3a6b'
-  },
-  {
-    id: 'nita',
-    name: 'Nita',
-    tagline: 'NITAAAA.',
-    image: '/portraits/nita_portrait.png',
-    bgColor: '#1a5c2a'
-  }
-];
-
 const state = {
   view: '',
+  brawlers: [],
+  brawlersLoaded: false,
+  brawlersError: '',
+  homeQuery: '',
   ranking: {},
   featuredBrawlerId: '',
   rankingLoaded: false,
@@ -132,6 +63,7 @@ let toastTimer = 0;
 let adminClock = 0;
 let rankingTimer = 0;
 let chatConfigPromise = null;
+let brawlersPromise = null;
 
 function purgeLegacyChatStorage() {
   const prefixes = [
@@ -172,7 +104,7 @@ function escapeAttr(value) {
 }
 
 function getBrawler(id) {
-  return brawlers.find((brawler) => brawler.id === id) || null;
+  return state.brawlers.find((brawler) => brawler.id === id) || null;
 }
 
 function pickRandomItem(items, fallback) {
@@ -225,8 +157,69 @@ async function ensureChatConfigLoaded() {
   return chatConfigPromise;
 }
 
+async function loadBrawlersPayload() {
+  try {
+    const data = await api('/api/brawlers');
+    if (Array.isArray(data.brawlers) && data.brawlers.length) return data.brawlers;
+  } catch {
+    // Fallback to the shared static catalog when the API is unavailable.
+  }
+
+  const response = await fetch('/brawlers.json', { cache: 'no-store' });
+  if (!response.ok) throw new Error('Não foi possível carregar a lista de personagens.');
+  const text = await response.text();
+  const parsed = text ? JSON.parse(text) : [];
+  if (!Array.isArray(parsed) || !parsed.length) {
+    throw new Error('Catálogo de personagens inválido.');
+  }
+  return parsed;
+}
+
+async function ensureBrawlersLoaded(forceReload = false) {
+  if (!forceReload && state.brawlersLoaded && state.brawlers.length) return state.brawlers;
+  if (!forceReload && brawlersPromise) return brawlersPromise;
+
+  state.brawlersError = '';
+  if (forceReload) state.brawlersLoaded = false;
+
+  brawlersPromise = loadBrawlersPayload()
+    .then((items) => {
+      state.brawlers = items;
+      state.brawlersLoaded = true;
+      state.brawlersError = '';
+      return items;
+    })
+    .catch((error) => {
+      state.brawlersLoaded = true;
+      state.brawlersError = error.message || 'Não foi possível carregar a lista de personagens.';
+      throw error;
+    })
+    .finally(() => {
+      brawlersPromise = null;
+    });
+
+  return brawlersPromise;
+}
+
 function brawlerPayload(brawler) {
   return { id: brawler.id, name: brawler.name };
+}
+
+function normalizeSearchText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function parseJsonResponse(text) {
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 function api(path, options = {}) {
@@ -240,14 +233,17 @@ function api(path, options = {}) {
     body: options.body === undefined ? undefined : JSON.stringify(options.body)
   }).then(async (response) => {
     const text = await response.text();
-    const data = text ? JSON.parse(text) : {};
+    const data = parseJsonResponse(text);
     if (!response.ok) {
-      const error = new Error(data.error || 'Erro de comunicação.');
+      const message = (data && typeof data === 'object' && data.error)
+        ? data.error
+        : text.trim() || 'Erro de comunicação.';
+      const error = new Error(message);
       error.status = response.status;
-      error.data = data;
+      error.data = data && typeof data === 'object' ? data : {};
       throw error;
     }
-    return data;
+    return data && typeof data === 'object' ? data : {};
   });
 }
 
@@ -297,16 +293,39 @@ function chatSessionStorageKey(brawlerId, userName) {
   return `${STORAGE.chatSession}:${brawlerId}:${encodeURIComponent(userName)}`;
 }
 
-function getOrCreateChatSessionId(brawlerId, userName) {
+function createChatSessionCredentials() {
+  return { id: clientId(), secret: clientId() };
+}
+
+function clearChatSessionCredentials(brawlerId, userName) {
+  try {
+    localStorage.removeItem(chatSessionStorageKey(brawlerId, userName));
+  } catch {
+    // Ignore storage failures and let the app recreate the session in-memory.
+  }
+}
+
+function getOrCreateChatSessionCredentials(brawlerId, userName) {
   const key = chatSessionStorageKey(brawlerId, userName);
   try {
     const stored = localStorage.getItem(key);
-    if (stored) return stored;
-    const created = clientId();
-    localStorage.setItem(key, created);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (parsed && typeof parsed.id === 'string' && typeof parsed.secret === 'string') {
+          return parsed;
+        }
+      } catch {
+        const migrated = { id: stored, secret: clientId() };
+        localStorage.setItem(key, JSON.stringify(migrated));
+        return migrated;
+      }
+    }
+    const created = createChatSessionCredentials();
+    localStorage.setItem(key, JSON.stringify(created));
     return created;
   } catch {
-    return clientId();
+    return createChatSessionCredentials();
   }
 }
 
@@ -545,6 +564,11 @@ function route() {
 function renderHomeRoute() {
   state.view = 'home';
   void ensureChatConfigLoaded();
+  void ensureBrawlersLoaded()
+    .catch(() => null)
+    .finally(() => {
+      if (state.view === 'home') renderHome();
+    });
   renderHome();
   document.body.classList.remove('view-chat');
   if (!hasSeenHumanNotice()) {
@@ -583,7 +607,7 @@ async function loadRanking() {
 }
 
 function sortedBrawlers() {
-  return [...brawlers].sort((a, b) => {
+  return [...state.brawlers].sort((a, b) => {
     if (state.featuredBrawlerId) {
       if (a.id === state.featuredBrawlerId) return -1;
       if (b.id === state.featuredBrawlerId) return 1;
@@ -596,11 +620,42 @@ function sortedBrawlers() {
 }
 
 function renderHome() {
+  const brawlers = state.brawlers;
+  const query = normalizeSearchText(state.homeQuery);
   const userName = localStorage.getItem(STORAGE.userName) || '';
   const totalConversations = Object.values(state.ranking).reduce(
     (sum, item) => sum + (item.conversations || 0),
     0
   );
+  const visibleBrawlers = sortedBrawlers().filter((brawler) => {
+    if (!query) return true;
+    const haystack = normalizeSearchText(`${brawler.name} ${brawler.tagline || ''}`);
+    return haystack.includes(query);
+  });
+  const catalogState = !state.brawlersLoaded && !brawlers.length
+    ? renderEmptyState({
+      icon: '🎮',
+      title: 'Carregando personagens',
+      description: 'Estamos preparando a lista de brawlers para você.'
+    })
+    : (!brawlers.length
+      ? renderEmptyState({
+        icon: '⚠️',
+        title: 'Lista de personagens indisponível',
+        description: state.brawlersError || 'Não foi possível carregar os personagens agora.',
+        actionLabel: 'Tentar novamente',
+        actionAttr: 'data-retry-brawlers'
+      })
+      : '');
+  const searchState = !catalogState && !visibleBrawlers.length
+    ? renderEmptyState({
+      icon: '🔎',
+      title: 'Nenhum personagem encontrado',
+      description: 'Ajuste o nome buscado para encontrar outro brawler.',
+      actionLabel: 'Limpar busca',
+      actionAttr: 'data-clear-home-search'
+    })
+    : '';
   const topId = state.featuredBrawlerId || sortedBrawlers().find(
     (brawler) => (state.ranking[brawler.id]?.conversations || 0) > 0
   )?.id || '';
@@ -623,13 +678,15 @@ function renderHome() {
         <div class="home-top">
           <div>
             <h2>Escolha um Brawler</h2>
+            <p class="soft home-helper">Busque por nome ou entre no personagem em destaque para continuar.</p>
           </div>
           <div class="home-actions">
+            <input class="field home-search" type="search" value="${escapeAttr(state.homeQuery)}" placeholder="Buscar personagem" aria-label="Buscar personagem" data-home-search />
             ${userName ? `<button class="secondary-button" data-change-name>Trocar apelido</button>` : ''}
           </div>
         </div>
-        <section class="brawler-grid" aria-label="Lista de Brawlers">
-          ${sortedBrawlers().map((brawler) => {
+        ${catalogState || searchState || `<section class="brawler-grid" aria-label="Lista de Brawlers">
+          ${visibleBrawlers.map((brawler) => {
             const count = state.ranking[brawler.id]?.conversations || 0;
             const isTop = brawler.id === topId;
             return `
@@ -644,7 +701,7 @@ function renderHome() {
               </button>
             `;
           }).join('')}
-        </section>
+        </section>`}
       </main>
     </div>
   `;
@@ -653,11 +710,26 @@ function renderHome() {
 }
 
 function bindHome() {
+  app.querySelector('[data-home-search]')?.addEventListener('input', (event) => {
+    state.homeQuery = event.currentTarget.value;
+    renderHome();
+  });
   app.querySelectorAll('[data-brawler]').forEach((button) => {
     button.addEventListener('click', () => {
       const brawler = getBrawler(button.dataset.brawler);
       if (brawler) openNicknameModal(brawler);
     });
+  });
+  app.querySelector('[data-clear-home-search]')?.addEventListener('click', () => {
+    state.homeQuery = '';
+    renderHome();
+  });
+  app.querySelector('[data-retry-brawlers]')?.addEventListener('click', () => {
+    void ensureBrawlersLoaded(true)
+      .catch(() => null)
+      .finally(() => {
+        if (state.view === 'home') renderHome();
+      });
   });
   app.querySelector('[data-change-name]')?.addEventListener('click', () => {
     localStorage.removeItem(STORAGE.userName);
@@ -682,21 +754,38 @@ function openHumanNoticeModal() {
           <h2 class="modal-title" id="human-notice-title">Aviso Importante</h2>
           <div class="muted">Antes de iniciar, leia este aviso.</div>
         </div>
-        <button class="close-button" data-ack-human-notice aria-label="Fechar aviso">${icons.close}</button>
+        <button class="close-button" data-ack-human-notice aria-label="Fechar aviso" disabled>${icons.close}</button>
       </header>
       <div class="modal-body">
         <div class="form-stack">
-          <p class="muted">As mensagens trocadas nesta plataforma podem ser lidas por humanos para moderacao, seguranca e melhoria da experiencia.</p>
-          <p class="muted">Nao compartilhe senhas, codigos ou dados pessoais sensiveis.</p>
-          <button class="primary-button" type="button" data-ack-human-notice>Entendi, continuar</button>
+          <p class="muted">As mensagens trocadas nesta plataforma serão lidas por humanos para moderação, segurança e melhoria da experiência.</p>
+          <p class="muted">Sua conversa também pode ser usada em um vídeo meu. Ao continuar, você concorda com sua potencial participação.</p>
+          <p class="muted">Não compartilhe senhas, códigos ou dados pessoais sensíveis.</p>
+          <label class="notice-confirm">
+            <input type="checkbox" data-human-consent />
+            <span>Li o aviso e entendo que a conversa pode ser lida por humanos e eventualmente usada em vídeo.</span>
+          </label>
+          <button class="primary-button" type="button" data-ack-human-notice disabled>Entendi, continuar</button>
         </div>
       </div>
     </section>
   `;
   document.body.appendChild(modal);
 
-  modal.querySelectorAll('[data-ack-human-notice]').forEach((button) => {
+  const ackButtons = modal.querySelectorAll('[data-ack-human-notice]');
+  const consent = modal.querySelector('[data-human-consent]');
+  const syncConsent = () => {
+    const allowed = Boolean(consent?.checked);
+    ackButtons.forEach((button) => {
+      button.disabled = !allowed;
+    });
+  };
+  consent?.addEventListener('change', syncConsent);
+  syncConsent();
+
+  ackButtons.forEach((button) => {
     button.addEventListener('click', () => {
+      if (button.disabled) return;
       markHumanNoticeSeen();
       closeModal();
     });
@@ -783,6 +872,14 @@ function openNicknameModal(brawler) {
 }
 
 async function renderChatRoute(brawlerId) {
+  try {
+    await ensureBrawlersLoaded();
+  } catch {
+    renderHomeRoute();
+    showToast(state.brawlersError || 'Não foi possível carregar a lista de personagens.', 'error');
+    return;
+  }
+
   const brawler = getBrawler(brawlerId);
   if (!brawler) {
     navigateTo('/');
@@ -799,10 +896,13 @@ async function renderChatRoute(brawlerId) {
   await ensureChatConfigLoaded();
 
   closeUserEvents();
-  const sessionId = getOrCreateChatSessionId(brawler.id, userName);
+  const session = getOrCreateChatSessionCredentials(brawler.id, userName);
+  const sessionId = session.id;
   state.view = 'chat';
   state.chat = {
     sessionId,
+    sessionSecret: session.secret,
+    streamToken: '',
     brawler,
     userName,
     messages: [],
@@ -826,15 +926,26 @@ async function renderChatRoute(brawlerId) {
   try {
     const data = await api('/api/user/join', {
       method: 'POST',
-      body: { userName, brawler: brawlerPayload(brawler), sessionId }
+      body: {
+        userName,
+        brawler: brawlerPayload(brawler),
+        sessionId,
+        sessionSecret: session.secret
+      }
     });
     if (!state.chat || state.chat.sessionId !== sessionId) return;
     state.chat.messages = data.messages || [];
+    state.chat.streamToken = data.streamToken || '';
     state.chat.loading = false;
     state.chat.connected = true;
-    openUserEvents(sessionId);
+    openUserEvents(sessionId, state.chat.streamToken);
     renderChat();
   } catch (err) {
+    if (err.status === 403 && /sessão de conversa inválida/i.test(err.message || '')) {
+      clearChatSessionCredentials(brawler.id, userName);
+      await renderChatRoute(brawler.id);
+      return;
+    }
     if (err.status === 403) {
       localStorage.removeItem(STORAGE.userName);
       showToast(err.message, 'error');
@@ -847,13 +958,21 @@ async function renderChatRoute(brawlerId) {
   }
 }
 
-function openUserEvents(sessionId) {
+function openUserEvents(sessionId, streamToken) {
+  if (!streamToken) {
+    if (state.chat) {
+      state.chat.connected = false;
+      state.chat.notice = 'Não foi possível autorizar a conexão em tempo real.';
+      renderChat({ preserveScroll: true, keepScrollTop: true });
+    }
+    return;
+  }
   state.userEvents?.close();
-  const source = new EventSource(`/api/events?role=user&sessionId=${encodeURIComponent(sessionId)}`);
+  const source = new EventSource(`/api/events?role=user&sessionId=${encodeURIComponent(sessionId)}&streamToken=${encodeURIComponent(streamToken)}`);
   state.userEvents = source;
 
   source.onopen = () => {
-    if (!state.chat || state.chat.sessionId !== sessionId) return;
+    if (!state.chat || state.chat.sessionId !== sessionId || state.chat.streamToken !== streamToken) return;
     state.chat.connected = true;
     if (state.chat.notice === 'Conexão em tempo real instável. Tentando reconectar...') {
       state.chat.notice = '';
@@ -862,7 +981,7 @@ function openUserEvents(sessionId) {
   };
 
   source.onerror = () => {
-    if (!state.chat || state.chat.sessionId !== sessionId) return;
+    if (!state.chat || state.chat.sessionId !== sessionId || state.chat.streamToken !== streamToken) return;
     state.chat.connected = false;
     if (!state.chat.loading) {
       state.chat.notice = state.chat.messages.length
@@ -895,6 +1014,14 @@ function openUserEvents(sessionId) {
     if (state.chat.isThinking === nextThinking) return;
     state.chat.isThinking = nextThinking;
     renderChat({ keepScrollTop: true });
+  });
+
+  source.addEventListener('not-found', () => {
+    if (!state.chat || state.chat.sessionId !== sessionId || state.chat.streamToken !== streamToken) return;
+    source.close();
+    state.chat.connected = false;
+    state.chat.notice = 'Sua sessão em tempo real expirou. Reconecte para continuar.';
+    renderChat({ preserveScroll: true, keepScrollTop: true });
   });
 }
 
@@ -989,12 +1116,16 @@ function renderChat(options = {}) {
       <footer class="composer">
         ${visibleNotice ? `<div class="notice">${escapeHtml(visibleNotice)}</div>` : ''}
         ${showRetry && messages.length ? '<div class="notice-actions"><button class="pill-button" type="button" data-chat-retry>Reconectar agora</button></div>' : ''}
-        <div class="human-notice-inline">👁 Mensagens podem ser lidas por humanos</div>
+        <div class="human-notice-inline">👁 Mensagens serão lidas por humanos</div>
         <form class="composer-form" data-chat-form>
           <label class="sr-only" for="chat-input">Mensagem</label>
           <textarea class="textarea" id="chat-input" rows="1" maxlength="1000" placeholder="${isRateLimited ? `Aguarde ${rateLimitRemaining}s...` : 'Digite sua mensagem...'}" ${connected && !isRateLimited && !sending ? '' : 'disabled'}>${escapeHtml(draft)}</textarea>
           <button class="send-button" type="submit" aria-label="Enviar mensagem" ${connected && draft.trim() && !isRateLimited && !sending ? '' : 'disabled'}>${icons.send}</button>
         </form>
+        <div class="composer-meta">
+          <span class="soft">${sending ? 'Enviando...' : connected ? 'Enter envia · Shift+Enter quebra linha' : 'Aguardando conexão em tempo real'}</span>
+          <span class="soft">${draft.length}/1000</span>
+        </div>
       </footer>
     </div>
   `;
@@ -1162,9 +1293,14 @@ async function sendChatMessage() {
 
   try {
     state.chat.sending = true;
+    renderChat({ preserveScroll: true, keepScrollTop: true });
     const data = await api('/api/user/message', {
       method: 'POST',
-      body: { sessionId: state.chat.sessionId, text }
+      body: {
+        sessionId: state.chat.sessionId,
+        sessionSecret: state.chat.sessionSecret,
+        text
+      }
     });
     state.chat.draft = '';
     state.chat.notice = '';
@@ -1191,6 +1327,7 @@ async function reactToMessage(messageId, emoji) {
       method: 'POST',
       body: {
         sessionId: state.chat.sessionId,
+        sessionSecret: state.chat.sessionSecret,
         messageId,
         emoji,
         userName: state.chat.userName
@@ -1205,6 +1342,11 @@ async function reactToMessage(messageId, emoji) {
 
 function renderAdminRoute() {
   state.view = 'admin';
+  void ensureBrawlersLoaded()
+    .catch(() => null)
+    .finally(() => {
+      if (state.view === 'admin') renderAdminWhenSafe();
+    });
   if (!state.admin.token) {
     stopAdminClock();
     renderLogin();
@@ -1967,6 +2109,7 @@ async function loadModeration() {
 
 function renderModerationView() {
   const data = state.admin.moderation;
+  const brawlers = state.brawlers;
   if (!data && state.admin.moderationLoading) {
     return `<main class="admin-main"><section class="moderation">${renderModerationSkeleton()}</section></main>`;
   }
@@ -2084,6 +2227,8 @@ async function saveSettings() {
 
 window.addEventListener('hashchange', route);
 window.addEventListener('popstate', route);
+window.addEventListener('offline', () => showToast('Você está offline. A conexão será retomada quando a internet voltar.', 'error'));
+window.addEventListener('online', () => showToast('Conexão restaurada.', 'success'));
 purgeLegacyChatStorage();
 void ensureChatConfigLoaded();
 
@@ -2091,7 +2236,7 @@ void ensureChatConfigLoaded();
   if (document.querySelector('.human-notice-badge')) return;
   const badge = document.createElement('div');
   badge.className = 'human-notice-badge';
-  badge.textContent = 'Mensagens podem ser lidas por humanos';
+  badge.textContent = 'Mensagens serão lidas por humanos';
   document.body.appendChild(badge);
 }());
 

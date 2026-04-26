@@ -4,7 +4,10 @@
   "description": "Recriacao completa do BrawlTalkie em JavaScript puro.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check": "node --check server.js && node --check public/app.js",
+    "test": "node --test",
+    "test:smoke": "node --test tests/smoke.test.mjs"
   },
   "engines": {
     "node": ">=18"
