@@ -16,6 +16,7 @@ const PRIMARY_PORTRAITS_DIR = path.join(__dirname, 'Portraits');
 const LEGACY_PORTRAITS_DIR = path.join(__dirname, 'BrawlTalking', 'portraits');
 const PORTRAITS_DIR = fs.existsSync(PRIMARY_PORTRAITS_DIR) ? PRIMARY_PORTRAITS_DIR : LEGACY_PORTRAITS_DIR;
 const CHAT_CONFIG_PATH = path.join(__dirname, 'chat-config.json');
+const MODERATION_CONFIG_PATH = path.join(__dirname, 'moderation-config.json');
 
 const MAX_BODY_BYTES = 1_000_000;
 const MESSAGE_LIMIT = 5;
@@ -56,7 +57,7 @@ const metrics = {
   pendingResponses: new Map()
 };
 
-let profanityWords = new Set([
+const DEFAULT_PROFANITY_WORDS = [
   'porra',
   'merda',
   'caralho',
@@ -69,9 +70,9 @@ let profanityWords = new Set([
   'vsf',
   'fdp',
   'pqp'
-]);
+];
 
-let nicknameBlacklist = new Set([
+const DEFAULT_NICKNAME_BLACKLIST = [
   'admin',
   'moderador',
   'sistema',
@@ -81,10 +82,7 @@ let nicknameBlacklist = new Set([
   'staff',
   'brawlstars',
   'supercell'
-]);
-
-let moderationMode = 'flag';
-let featuredBrawlerId = '';
+];
 
 const DEFAULT_CHAT_CONFIG = {
   welcomeMessages: [
@@ -92,6 +90,20 @@ const DEFAULT_CHAT_CONFIG = {
   ],
   statusTexts: ['esta pensando']
 };
+
+const DEFAULT_MODERATION_CONFIG = {
+  words: DEFAULT_PROFANITY_WORDS,
+  nicknameBlacklist: DEFAULT_NICKNAME_BLACKLIST,
+  moderationMode: 'flag',
+  featuredBrawlerId: ''
+};
+
+const initialModerationConfig = readModerationConfig();
+
+let profanityWords = new Set(initialModerationConfig.words);
+let nicknameBlacklist = new Set(initialModerationConfig.nicknameBlacklist);
+let moderationMode = initialModerationConfig.moderationMode;
+let featuredBrawlerId = initialModerationConfig.featuredBrawlerId;
 
 function nowIso() {
   return new Date().toISOString();
@@ -166,6 +178,66 @@ function sanitizeMessageText(value, max = 1000) {
     .slice(0, max);
 }
 
+function sanitizeModerationEntries(values) {
+  if (!Array.isArray(values)) return [];
+  return Array.from(new Set(values.map((value) => sanitizeText(value, 60).toLowerCase()).filter(Boolean))).sort();
+}
+
+function sanitizeModerationMode(value) {
+  return value === 'block' ? 'block' : 'flag';
+}
+
+function sanitizeFeaturedBrawlerId(value) {
+  return typeof value === 'string' && isValidBrawler(value) ? value : '';
+}
+
+function readModerationConfig() {
+  try {
+    const raw = fs.readFileSync(MODERATION_CONFIG_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    const nicknameSource = Array.isArray(parsed.nicknameBlacklist)
+      ? parsed.nicknameBlacklist
+      : Array.isArray(parsed.terms)
+        ? parsed.terms
+        : DEFAULT_MODERATION_CONFIG.nicknameBlacklist;
+
+    return {
+      words: sanitizeModerationEntries(Array.isArray(parsed.words) ? parsed.words : DEFAULT_MODERATION_CONFIG.words),
+      nicknameBlacklist: sanitizeModerationEntries(nicknameSource),
+      moderationMode: sanitizeModerationMode(parsed.moderationMode),
+      featuredBrawlerId: sanitizeFeaturedBrawlerId(parsed.featuredBrawlerId)
+    };
+  } catch {
+    return {
+      words: [...DEFAULT_MODERATION_CONFIG.words],
+      nicknameBlacklist: [...DEFAULT_MODERATION_CONFIG.nicknameBlacklist],
+      moderationMode: DEFAULT_MODERATION_CONFIG.moderationMode,
+      featuredBrawlerId: DEFAULT_MODERATION_CONFIG.featuredBrawlerId
+    };
+  }
+}
+
+function writeModerationConfig(config) {
+  const normalized = {
+    words: sanitizeModerationEntries(config.words),
+    nicknameBlacklist: sanitizeModerationEntries(config.nicknameBlacklist),
+    moderationMode: sanitizeModerationMode(config.moderationMode),
+    featuredBrawlerId: sanitizeFeaturedBrawlerId(config.featuredBrawlerId)
+  };
+
+  fs.writeFileSync(MODERATION_CONFIG_PATH, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+  return normalized;
+}
+
+function currentModerationConfig() {
+  return {
+    words: Array.from(profanityWords),
+    nicknameBlacklist: Array.from(nicknameBlacklist),
+    moderationMode,
+    featuredBrawlerId
+  };
+}
+
 function isValidBrawler(id) {
   return brawlers.some((brawler) => brawler.id === id);
 }
@@ -178,13 +250,114 @@ function compactBrawler(raw) {
   return { id: known.id, name: known.name };
 }
 
-function containsProfanity(text) {
-  const normalized = normalizeText(text);
-  for (const word of profanityWords) {
-    const normalizedWord = normalizeText(word);
-    if (normalizedWord && normalized.includes(normalizedWord)) return word;
+function normalizeModerationValue(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function createModerationSearchIndex(text) {
+  const source = String(text || '');
+  let normalized = '';
+  const indexes = [];
+
+  for (let index = 0; index < source.length; index += 1) {
+    const normalizedChunk = String(source[index] || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+
+    for (const char of normalizedChunk) {
+      if (!/[a-z0-9]/.test(char)) continue;
+      normalized += char;
+      indexes.push(index);
+    }
   }
-  return '';
+
+  return { normalized, indexes };
+}
+
+function mergeRanges(ranges) {
+  if (!ranges.length) return [];
+  const sorted = [...ranges].sort((left, right) => left.start - right.start);
+  const merged = [sorted[0]];
+
+  for (const range of sorted.slice(1)) {
+    const current = merged[merged.length - 1];
+    if (range.start <= current.end) {
+      current.end = Math.max(current.end, range.end);
+      continue;
+    }
+    merged.push({ ...range });
+  }
+
+  return merged;
+}
+
+function censorText(text, ranges) {
+  const chars = String(text || '').split('');
+
+  for (const range of ranges) {
+    for (let index = range.start; index < range.end && index < chars.length; index += 1) {
+      if (!/\s/.test(chars[index])) chars[index] = '*';
+    }
+  }
+
+  return chars.join('');
+}
+
+function moderateMessageText(text) {
+  const searchIndex = createModerationSearchIndex(text);
+  const terms = new Set();
+  const matches = [];
+
+  for (const word of profanityWords) {
+    const normalizedWord = normalizeModerationValue(word);
+    if (!normalizedWord) continue;
+
+    let cursor = searchIndex.normalized.indexOf(normalizedWord);
+    while (cursor >= 0) {
+      const start = searchIndex.indexes[cursor];
+      const end = searchIndex.indexes[cursor + normalizedWord.length - 1] + 1;
+      matches.push({ start, end });
+      terms.add(word);
+      cursor = searchIndex.normalized.indexOf(normalizedWord, cursor + normalizedWord.length);
+    }
+  }
+
+  const flaggedTerms = Array.from(terms).sort();
+  if (!flaggedTerms.length) {
+    return {
+      blocked: false,
+      flagged: false,
+      moderatedText: text,
+      flaggedTerms,
+      flaggedTerm: '',
+      moderationAction: 'allow'
+    };
+  }
+
+  if (moderationMode === 'block') {
+    return {
+      blocked: true,
+      flagged: true,
+      moderatedText: text,
+      flaggedTerms,
+      flaggedTerm: flaggedTerms[0] || '',
+      moderationAction: 'block'
+    };
+  }
+
+  return {
+    blocked: false,
+    flagged: true,
+    moderatedText: censorText(text, mergeRanges(matches)),
+    flaggedTerms,
+    flaggedTerm: flaggedTerms[0] || '',
+    moderationAction: 'censor'
+  };
 }
 
 function isNicknameBlocked(name) {
@@ -593,8 +766,8 @@ async function handleApi(req, res, url) {
       });
     }
 
-    const forbidden = containsProfanity(text);
-    if (forbidden && moderationMode === 'block') {
+    const moderation = moderateMessageText(text);
+    if (moderation.blocked) {
       return sendJson(res, 422, {
         error: 'Sua mensagem não pôde ser enviada. Por favor, mantenha um tom respeitoso.'
       });
@@ -603,10 +776,13 @@ async function handleApi(req, res, url) {
     const message = {
       id: generateId('msg'),
       type: 'user',
-      text,
+      text: moderation.moderatedText,
+      originalText: moderation.moderationAction === 'censor' ? text : '',
       timestamp: nowIso(),
-      flagged: Boolean(forbidden),
-      flaggedTerm: forbidden || '',
+      flagged: moderation.flagged,
+      flaggedTerm: moderation.flaggedTerm,
+      flaggedTerms: moderation.flaggedTerms,
+      moderationAction: moderation.moderationAction,
       reactions: {}
     };
 
@@ -779,7 +955,11 @@ async function handleApi(req, res, url) {
     if (req.method === 'PUT' && pathname === '/api/admin/word-filter') {
       const body = await readJson(req);
       if (!Array.isArray(body.words)) return sendJson(res, 400, { error: 'words deve ser um array.' });
-      profanityWords = new Set(body.words.map((word) => sanitizeText(word, 60).toLowerCase()).filter(Boolean));
+      const nextConfig = writeModerationConfig({
+        ...currentModerationConfig(),
+        words: body.words
+      });
+      profanityWords = new Set(nextConfig.words);
       return sendJson(res, 200, { words: Array.from(profanityWords).sort() });
     }
 
@@ -790,7 +970,11 @@ async function handleApi(req, res, url) {
     if (req.method === 'PUT' && pathname === '/api/admin/nickname-blacklist') {
       const body = await readJson(req);
       if (!Array.isArray(body.terms)) return sendJson(res, 400, { error: 'terms deve ser um array.' });
-      nicknameBlacklist = new Set(body.terms.map((term) => sanitizeText(term, 60).toLowerCase()).filter(Boolean));
+      const nextConfig = writeModerationConfig({
+        ...currentModerationConfig(),
+        nicknameBlacklist: body.terms
+      });
+      nicknameBlacklist = new Set(nextConfig.nicknameBlacklist);
       return sendJson(res, 200, { terms: Array.from(nicknameBlacklist).sort() });
     }
 
@@ -800,11 +984,19 @@ async function handleApi(req, res, url) {
 
     if (req.method === 'PUT' && pathname === '/api/admin/settings') {
       const body = await readJson(req);
-      if (body.moderationMode === 'flag' || body.moderationMode === 'block') {
-        moderationMode = body.moderationMode;
-      }
-      if (typeof body.featuredBrawlerId === 'string') {
-        featuredBrawlerId = isValidBrawler(body.featuredBrawlerId) ? body.featuredBrawlerId : '';
+      const nextConfig = writeModerationConfig({
+        ...currentModerationConfig(),
+        moderationMode: body.moderationMode === 'flag' || body.moderationMode === 'block'
+          ? body.moderationMode
+          : moderationMode,
+        featuredBrawlerId: typeof body.featuredBrawlerId === 'string'
+          ? body.featuredBrawlerId
+          : featuredBrawlerId
+      });
+      const featuredChanged = nextConfig.featuredBrawlerId !== featuredBrawlerId;
+      moderationMode = nextConfig.moderationMode;
+      featuredBrawlerId = nextConfig.featuredBrawlerId;
+      if (featuredChanged) {
         broadcastAdmin('ranking-update', rankingPayload());
       }
       return sendJson(res, 200, { moderationMode, featuredBrawlerId });

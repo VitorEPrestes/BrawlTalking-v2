@@ -837,7 +837,10 @@ img {
   overflow: hidden;
   display: grid;
   grid-template-columns: 340px 1fr;
-  background: #11151d;
+  background:
+    radial-gradient(circle at top right, rgba(68, 210, 255, 0.08), transparent 28%),
+    radial-gradient(circle at bottom left, rgba(255, 210, 63, 0.08), transparent 32%),
+    #11151d;
 }
 
 .admin-sidebar {
@@ -846,7 +849,8 @@ img {
   height: 100vh;
   overflow: hidden;
   border-right: 1px solid var(--line);
-  background: rgba(10, 13, 18, 0.72);
+  background: rgba(10, 13, 18, 0.84);
+  backdrop-filter: blur(14px);
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
 }
@@ -856,8 +860,21 @@ img {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px;
+  padding: 18px 16px 14px;
   border-bottom: 1px solid var(--line);
+}
+
+.admin-head-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.admin-kicker {
+  color: rgba(255, 210, 63, 0.78);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .admin-head .brand {
@@ -903,7 +920,9 @@ img {
   padding: 10px 16px;
   color: var(--soft);
   font-size: 0.86rem;
+  letter-spacing: 0.02em;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  pointer-events: none;
 }
 
 .conversation-list {
@@ -1026,6 +1045,7 @@ img {
   overflow: hidden;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+  background: rgba(9, 12, 18, 0.42);
 }
 
 .admin-main > .messages {
@@ -1040,11 +1060,111 @@ img {
 
 .admin-chat-head {
   min-height: 70px;
-  padding: 13px 18px;
+  padding: 16px 18px;
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: rgba(12, 15, 21, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.admin-chat-profile {
+  min-width: 0;
+  display: flex;
+  align-items: center;
   gap: 12px;
+}
+
+.admin-chat-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.admin-chat-copy strong {
+  font-size: 1.04rem;
+}
+
+.admin-chat-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.admin-chat-status {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-pill,
+.subtle-badge,
+.pin-badge {
+  min-height: 26px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.status-pill.success {
+  color: #d7ffe2;
+  border-color: rgba(100, 212, 135, 0.3);
+  background: rgba(100, 212, 135, 0.14);
+}
+
+.status-pill.warning {
+  color: #ffe0b2;
+  border-color: rgba(255, 159, 67, 0.32);
+  background: rgba(255, 159, 67, 0.14);
+}
+
+.status-pill.urgent {
+  color: #ffd5dd;
+  border-color: rgba(255, 92, 122, 0.34);
+  background: rgba(255, 92, 122, 0.16);
+}
+
+.subtle-badge,
+.pin-badge {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.pin-badge {
+  color: #15171c;
+  background: rgba(255, 210, 63, 0.88);
+  border-color: transparent;
+}
+
+.admin-mobile-back {
+  display: none;
+}
+
+.admin-composer {
+  display: grid;
+  gap: 10px;
+}
+
+.composer-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .empty-state {
@@ -1054,6 +1174,14 @@ img {
   color: var(--soft);
   text-align: center;
   padding: 28px;
+}
+
+.admin-main .empty-state {
+  pointer-events: none;
+}
+
+.admin-main .empty-actions {
+  pointer-events: auto;
 }
 
 .empty-card {
@@ -1198,6 +1326,21 @@ img {
   font-size: 0.78rem;
 }
 
+.flag-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.moderation-toggle {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
 .bubble.flagged {
   border-color: rgba(255, 92, 122, 0.45);
   box-shadow: 0 0 0 1px rgba(255, 92, 122, 0.18);
@@ -1218,6 +1361,23 @@ img {
   margin-bottom: 20px;
 }
 
+.view-head-rich {
+  align-items: flex-start;
+}
+
+.view-copy {
+  display: grid;
+  gap: 5px;
+}
+
+.view-kicker {
+  color: rgba(255, 210, 63, 0.78);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .view-head h2 {
   margin: 0;
   font-size: 1.7rem;
@@ -1233,9 +1393,43 @@ img {
 .editor,
 .ranking-panel {
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.04));
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.16);
   padding: 16px;
+}
+
+.metric-card {
+  min-height: 146px;
+}
+
+.metric-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.metric-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 1rem;
+}
+
+.metric-card.success {
+  border-color: rgba(100, 212, 135, 0.2);
+}
+
+.metric-card.warning {
+  border-color: rgba(255, 159, 67, 0.22);
+}
+
+.metric-card.accent {
+  border-color: rgba(68, 210, 255, 0.2);
 }
 
 .metric-card p {
@@ -1257,6 +1451,10 @@ img {
 
 .ranking-panel {
   margin-top: 16px;
+}
+
+.ranking-panel h3 {
+  margin: 0 0 8px;
 }
 
 .bar-row {
@@ -1384,17 +1582,123 @@ img {
     grid-template-rows: minmax(0, 48vh) minmax(0, 1fr);
   }
 
+  .admin.admin-chat-list {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .admin.admin-chat-list .admin-main {
+    display: none;
+  }
+
+  .admin.admin-chat-focus {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .admin.admin-chat-focus .admin-sidebar {
+    display: none;
+  }
+
   .admin-sidebar {
     height: auto;
     min-height: 0;
     border-right: 0;
     border-bottom: 1px solid var(--line);
     max-height: none;
+    background: rgba(9, 12, 18, 0.96);
   }
 
   .admin-main {
     height: auto;
     min-height: 0;
+    background: rgba(9, 12, 18, 0.96);
+  }
+
+  .admin-head {
+    padding: 14px 14px 12px;
+  }
+
+  .admin-head .brand {
+    font-size: 1.42rem;
+  }
+
+  .tabs {
+    gap: 8px;
+    padding: 10px 12px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(12, 15, 21, 0.94);
+  }
+
+  .tab {
+    min-height: 42px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .tab.active {
+    border-bottom-color: transparent;
+  }
+
+  .conversation-count {
+    padding: 10px 14px 8px;
+    border-bottom: 0;
+  }
+
+  .conversation-row {
+    padding-right: 8px;
+  }
+
+  .conversation-item {
+    padding: 12px;
+    grid-template-columns: 40px 1fr auto;
+    gap: 9px;
+  }
+
+  .conversation-avatar {
+    width: 40px;
+    height: 40px;
+  }
+
+  .conversation-preview {
+    margin-top: 3px;
+    font-size: 0.79rem;
+  }
+
+  .admin-chat-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .admin-chat-status {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .messages {
+    padding-inline: 12px;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .admin-composer {
+    padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+    z-index: 2;
+    position: relative;
+  }
+
+  .admin-composer .textarea {
+    font-size: 16px;
+    min-height: 42px;
+    touch-action: manipulation;
+  }
+
+  .admin-mobile-back {
+    display: inline-flex;
   }
 }
 
@@ -1437,10 +1741,36 @@ img {
   .bar-row {
     grid-template-columns: 1fr;
   }
+
+  .composer-meta,
+  .view-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .metrics,
+  .moderation {
+    padding: 16px;
+  }
+
+  .admin-chat-badges {
+    gap: 6px;
+  }
+
+  .status-pill,
+  .subtle-badge,
+  .pin-badge,
+  .moderation-toggle {
+    font-size: 0.72rem;
+  }
 }
 
 @media (max-width: 480px) {
   .message-stack {
     max-width: calc(100vw - 86px);
+  }
+
+  .admin-summary {
+    grid-template-columns: 1fr;
   }
 }

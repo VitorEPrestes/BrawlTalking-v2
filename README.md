@@ -7,6 +7,7 @@ Projeto de chat/local frontend para BrawlTalking.
 Estrutura principal:
 - `BrawlTalking/` — frontend React
 - `public/` — arquivos estáticos (`app.js`, `index.html`, `styles.css`)
+- `moderation-config.json` — persistência dos filtros e configurações de moderação do painel admin
 
 Como rodar (exemplo básico):
 
@@ -28,5 +29,9 @@ Variáveis de ambiente recomendadas:
 - `TOKEN_SECRET`: segredo usado para assinar tokens de autenticação.
 
 Em produção (`NODE_ENV=production`), o servidor exige `ADMIN_PASSWORD` e `TOKEN_SECRET` definidos com valores fortes.
+
+Persistência de moderação:
+
+- Alterações em filtro de palavras, blacklist de apelidos e modo de moderação são salvas em `moderation-config.json`.
 
 Contribuições são bem-vindas. Abra issues ou PRs no repositório remoto.

@@ -111,6 +111,7 @@ const state = {
     reconnectTimer: 0,
     pendingRender: false,
     sendingReply: false,
+    revealedMessages: {},
     metrics: null,
     metricsLoading: false,
     metricsError: '',
@@ -622,10 +623,8 @@ function renderHome() {
         <div class="home-top">
           <div>
             <h2>Escolha um Brawler</h2>
-            <div class="muted">${state.rankingLoaded ? 'O ranking se reorganiza conforme novas conversas começam.' : 'Atualizando ranking ao vivo...'}</div>
           </div>
           <div class="home-actions">
-            <button class="secondary-button" type="button" data-open-admin>Painel admin</button>
             ${userName ? `<button class="secondary-button" data-change-name>Trocar apelido</button>` : ''}
           </div>
         </div>
@@ -659,9 +658,6 @@ function bindHome() {
       const brawler = getBrawler(button.dataset.brawler);
       if (brawler) openNicknameModal(brawler);
     });
-  });
-  app.querySelector('[data-open-admin]')?.addEventListener('click', () => {
-    navigateTo('/admin');
   });
   app.querySelector('[data-change-name]')?.addEventListener('click', () => {
     localStorage.removeItem(STORAGE.userName);
@@ -1329,6 +1325,7 @@ async function openAdminEvents() {
     state.admin.conversations = [];
     state.admin.details = {};
     state.admin.activeConvId = '';
+    state.admin.revealedMessages = {};
     state.admin.metrics = null;
     renderAdminWhenSafe();
   });
@@ -1357,6 +1354,7 @@ function logoutAdmin() {
   localStorage.removeItem(STORAGE.adminToken);
   state.admin.token = '';
   state.admin.started = false;
+  state.admin.revealedMessages = {};
   closeAdminEvents();
   if (state.view === 'admin') renderLogin();
 }
@@ -1394,6 +1392,16 @@ function appendAdminDetailMessage(convId, message) {
   }
 }
 
+function isAdminMessageRevealed(messageId) {
+  return Boolean(state.admin.revealedMessages[messageId]);
+}
+
+function toggleAdminMessageReveal(messageId) {
+  if (!messageId) return;
+  state.admin.revealedMessages[messageId] = !state.admin.revealedMessages[messageId];
+  renderAdminAndMaintainScroll();
+}
+
 function updateAdminReactions(convId, messageId, reactions) {
   const detail = state.admin.details[convId];
   if (!detail) return;
@@ -1421,6 +1429,9 @@ function renderAdmin(options = {}) {
   const conversationCountLabel = state.admin.loadingConversations
     ? 'Carregando conversas...'
     : `${state.admin.conversations.length} conversa${state.admin.conversations.length === 1 ? '' : 's'}`;
+  const adminModeClass = state.admin.tab === 'chats'
+    ? (state.admin.activeConvId ? 'admin-chat-focus' : 'admin-chat-list')
+    : '';
 
   const previousList = app.querySelector('.admin-main .messages');
   const previousScroll = previousList ? {
@@ -1429,12 +1440,13 @@ function renderAdmin(options = {}) {
   } : null;
 
   app.innerHTML = `
-    <div class="app admin">
+    <div class="app admin ${adminModeClass}">
       <aside class="admin-sidebar">
         <header class="admin-head">
-          <div>
+          <div class="admin-head-copy">
+            <div class="admin-kicker">Acesso restrito</div>
             <h1 class="brand">Brawl Talk<span class="brand-ing">ing</span></h1>
-            <div class="soft">Operador</div>
+            <div class="soft">Operação em tempo real</div>
           </div>
           <button class="icon-button" data-admin-logout aria-label="Sair">${icons.close}</button>
         </header>
@@ -1500,6 +1512,11 @@ function renderConversationList() {
     const brawler = getBrawler(conv.brawler?.id);
     const wait = waitInfo(conv.waitingSince);
     const active = conv.id === state.admin.activeConvId;
+    const previewText = conv.lastMessage
+      ? conv.lastMessage.flagged
+        ? ' · mensagem moderada'
+        : ` · ${escapeHtml(conv.lastMessage.text)}`
+      : '';
     return `
       <div class="conversation-row ${active ? 'active' : ''}">
         <button class="conversation-item ${active ? 'active' : ''} ${wait?.level || ''}" type="button" data-select-conv="${escapeAttr(conv.id)}">
@@ -1509,7 +1526,7 @@ function renderConversationList() {
               ${conv.pinned ? '<span title="Fixado">📌</span>' : ''}
               <span class="truncate">${escapeHtml(conv.userName)}</span>
             </span>
-            <span class="conversation-preview truncate">${escapeHtml(conv.brawler?.name || '')}${conv.lastMessage ? ` · ${escapeHtml(conv.lastMessage.text)}` : ''}</span>
+            <span class="conversation-preview truncate">${escapeHtml(conv.brawler?.name || '')}${previewText}</span>
           </span>
           <span class="conversation-meta">
             ${wait ? `<span class="badge wait-badge ${wait.level}">${wait.label}</span>` : ''}
@@ -1543,13 +1560,28 @@ function renderAdminMain() {
   const brawler = getBrawler(conv.brawler?.id);
   const isDetailLoading = state.admin.detailLoadingId === activeId;
   const hasDetailError = state.admin.detailError.convId === activeId;
+  const wait = waitInfo(conv.waitingSince);
+  const totalMessages = detail?.messages.length || 0;
+  const userMessages = detail ? detail.messages.filter((message) => message.type === 'user').length : 0;
   return `
     <main class="admin-main">
       <header class="admin-chat-head">
-        <span class="conversation-avatar" style="${brawler ? `background-color:${escapeAttr(brawler.bgColor || '')};` : ''}">${brawler ? `<img src="${escapeAttr(brawler.image)}" alt="Avatar de ${escapeAttr(brawler.name)}" />` : ''}</span>
-        <div>
-          <strong>${escapeHtml(conv.userName)}</strong>
-          <div class="muted">conversando com ${escapeHtml(conv.brawler?.name || '')}</div>
+        <div class="admin-chat-profile">
+          <span class="conversation-avatar" style="${brawler ? `background-color:${escapeAttr(brawler.bgColor || '')};` : ''}">${brawler ? `<img src="${escapeAttr(brawler.image)}" alt="Avatar de ${escapeAttr(brawler.name)}" />` : ''}</span>
+          <div class="admin-chat-copy">
+            <strong>${escapeHtml(conv.userName)}</strong>
+            <div class="muted">conversando com ${escapeHtml(conv.brawler?.name || '')}</div>
+            <div class="admin-chat-badges">
+              <span class="badge subtle-badge">${totalMessages || 0} msg${totalMessages === 1 ? '' : 's'}</span>
+              ${userMessages ? `<span class="badge subtle-badge">${userMessages} do visitante</span>` : ''}
+              ${conv.pinned ? '<span class="badge pin-badge">Fixada</span>' : ''}
+              ${wait ? `<span class="badge wait-badge ${wait.level}">${wait.label}</span>` : ''}
+            </div>
+          </div>
+        </div>
+        <div class="admin-chat-status">
+          <button class="pill-button admin-mobile-back" type="button" data-admin-back>Voltar à fila</button>
+          <span class="status-pill ${wait ? (wait.level || 'warning') : 'success'}">${wait ? 'Na fila' : 'Em atendimento'}</span>
         </div>
       </header>
       <section class="messages">
@@ -1567,10 +1599,14 @@ function renderAdminMain() {
               ? detail.messages.map((message) => renderAdminMessage(message, conv)).join('')
               : renderMessageSkeleton(3)}
       </section>
-      <footer class="composer">
+      <footer class="composer admin-composer">
+        <div class="composer-meta">
+          <span class="soft">Respondendo como ${escapeHtml(conv.brawler?.name || 'personagem')}</span>
+          <span class="soft">Enter envia · Shift+Enter quebra linha</span>
+        </div>
         <form class="composer-form" data-admin-reply-form>
           <label class="sr-only" for="reply-input">Resposta</label>
-          <textarea class="textarea" id="reply-input" rows="1" maxlength="1000" placeholder="Responder como ${escapeAttr(conv.brawler?.name || 'personagem')}...">${escapeHtml(state.admin.replyDraft)}</textarea>
+          <textarea class="textarea" id="reply-input" rows="1" maxlength="1000" inputmode="text" autocomplete="off" spellcheck="true" placeholder="Responder como ${escapeAttr(conv.brawler?.name || 'personagem')}...">${escapeHtml(state.admin.replyDraft)}</textarea>
           <button class="send-button" type="submit" aria-label="Enviar resposta" ${state.admin.replyDraft.trim() && !state.admin.sendingReply ? '' : 'disabled'}>${icons.send}</button>
         </form>
       </footer>
@@ -1583,12 +1619,24 @@ function renderAdminMessage(message, conv) {
   const brawler = getBrawler(conv.brawler?.id);
   const reactions = message.reactions || {};
   const hasReactions = Object.values(reactions).some((users) => users.length > 0);
+  const canRevealOriginal = Boolean(message.flagged && message.originalText && message.originalText !== message.text);
+  const revealOriginal = canRevealOriginal && isAdminMessageRevealed(message.id);
+  const displayedText = message.flagged
+    ? revealOriginal
+      ? message.originalText
+      : 'Conteúdo moderado oculto.'
+    : message.text;
   return `
     <article class="message-row ${isUser ? 'brawler' : 'user'}">
       ${isUser && brawler ? `<div class="message-avatar" style="background-color:${escapeAttr(brawler.bgColor || '')};"><img src="${escapeAttr(brawler.image)}" alt="${escapeAttr(brawler.name)}" /></div>` : ''}
       <div class="message-stack">
-        ${message.flagged ? '<span class="flag">⚠ mensagem sinalizada</span>' : ''}
-        <div class="bubble ${message.flagged ? 'flagged' : ''}">${escapeHtml(message.text)}</div>
+        ${message.flagged ? `
+          <div class="flag-row">
+            <span class="flag">⚠ mensagem moderada automaticamente</span>
+            ${canRevealOriginal ? `<button class="pill-button moderation-toggle" type="button" data-toggle-moderated-message="${escapeAttr(message.id)}">${revealOriginal ? 'Ocultar mensagem' : 'Ver mensagem'}</button>` : ''}
+          </div>
+        ` : ''}
+        <div class="bubble ${message.flagged ? 'flagged' : ''}">${escapeHtml(displayedText)}</div>
         ${hasReactions ? renderAdminReactions(reactions) : ''}
         <div class="message-time">${escapeHtml(isUser ? conv.userName : conv.brawler?.name || '')} · ${formatTime(message.timestamp)}</div>
       </div>
@@ -1634,6 +1682,18 @@ function bindAdmin() {
       event.stopPropagation();
       await pinConversation(button.dataset.pinConv);
     });
+  });
+
+  app.querySelectorAll('[data-toggle-moderated-message]').forEach((button) => {
+    button.addEventListener('click', () => {
+      toggleAdminMessageReveal(button.dataset.toggleModeratedMessage);
+    });
+  });
+
+  app.querySelector('[data-admin-back]')?.addEventListener('click', () => {
+    state.admin.activeConvId = '';
+    state.admin.replyDraft = '';
+    renderAdmin();
   });
 
   const reply = app.querySelector('#reply-input');
@@ -1819,31 +1879,38 @@ function renderMetricsView() {
   }
 
   const cards = [
-    ['Sessões ativas', data.activeSessionsCount, 'agora'],
-    ['Conversas', data.totalConversations, `${data.totalJoins} acessos`],
-    ['Engajamento', `${data.engagementRate}%`, `${data.engagedConversations} com 3+ mensagens`],
-    ['Retorno', `${data.returnRate}%`, `${data.returnJoins} retornos`],
-    ['Resposta média', formatDuration(data.avgResponseTimeMs), `${data.totalResponsesSampled} respostas`],
-    ['Sessão média', formatDuration(data.avgSessionDurationMs), `${data.totalSessionsSampled} sessões`]
+    { label: 'Sessões ativas', value: data.activeSessionsCount, sub: 'agora', icon: '🟢', tone: 'success' },
+    { label: 'Conversas', value: data.totalConversations, sub: `${data.totalJoins} acessos`, icon: '💬', tone: 'accent' },
+    { label: 'Engajamento', value: `${data.engagementRate}%`, sub: `${data.engagedConversations} com 3+ mensagens`, icon: '🎯', tone: 'warning' },
+    { label: 'Retorno', value: `${data.returnRate}%`, sub: `${data.returnJoins} retornos`, icon: '🔁', tone: 'neutral' },
+    { label: 'Resposta média', value: formatDuration(data.avgResponseTimeMs), sub: `${data.totalResponsesSampled} respostas`, icon: '⚡', tone: 'warning' },
+    { label: 'Sessão média', value: formatDuration(data.avgSessionDurationMs), sub: `${data.totalSessionsSampled} sessões`, icon: '⏱', tone: 'accent' }
   ];
   const max = Math.max(1, ...(data.brawlerStats || []).map((item) => item.conversations));
 
   return `
     <main class="admin-main">
       <section class="metrics">
-        <div class="view-head">
-          <h2>Métricas</h2>
+        <div class="view-head view-head-rich">
+          <div class="view-copy">
+            <span class="view-kicker">Painel secreto</span>
+            <h2>Métricas</h2>
+            <p class="muted">Acompanhe volume, engajamento e velocidade de atendimento em tempo real.</p>
+          </div>
           <div class="home-actions">
             <button class="icon-button" data-refresh-metrics aria-label="Atualizar">${icons.refresh}</button>
             <button class="danger-button" data-reset-metrics>Zerar</button>
           </div>
         </div>
         <div class="metrics-grid">
-          ${cards.map(([label, value, sub]) => `
-            <article class="metric-card">
-              <p class="muted">${escapeHtml(label)}</p>
-              <div class="metric-value">${escapeHtml(value)}</div>
-              <p class="metric-sub">${escapeHtml(sub)}</p>
+          ${cards.map((card) => `
+            <article class="metric-card ${card.tone}">
+              <div class="metric-card-top">
+                <p class="muted">${escapeHtml(card.label)}</p>
+                <span class="metric-icon" aria-hidden="true">${escapeHtml(card.icon)}</span>
+              </div>
+              <div class="metric-value">${escapeHtml(card.value)}</div>
+              <p class="metric-sub">${escapeHtml(card.sub)}</p>
             </article>
           `).join('')}
         </div>
@@ -1917,14 +1984,18 @@ function renderModerationView() {
   return `
     <main class="admin-main">
       <section class="moderation">
-        <div class="view-head">
-          <h2>Moderação</h2>
+        <div class="view-head view-head-rich">
+          <div class="view-copy">
+            <span class="view-kicker">Controles</span>
+            <h2>Moderação</h2>
+            <p class="muted">Mascare palavras sensíveis na conversa ou bloqueie o envio antes que a mensagem chegue à fila.</p>
+          </div>
         </div>
         <div class="settings-grid">
           <label>
             <span class="muted">Filtro de mensagens</span>
             <select class="select" data-moderation-mode>
-              <option value="flag" ${data.settings.moderationMode === 'flag' ? 'selected' : ''}>Sinalizar</option>
+              <option value="flag" ${data.settings.moderationMode === 'flag' ? 'selected' : ''}>Censurar e sinalizar</option>
               <option value="block" ${data.settings.moderationMode === 'block' ? 'selected' : ''}>Bloquear</option>
             </select>
           </label>
@@ -1951,7 +2022,7 @@ function renderListEditor(type, title, items, placeholder, formAttr, removeAttr)
   return `
     <section class="editor">
       <h3>${escapeHtml(title)}</h3>
-      <p class="muted">${type === 'words' ? 'Mensagens podem ser sinalizadas ou bloqueadas.' : 'Correspondência parcial, sem diferenciar maiúsculas.'}</p>
+      <p class="muted">${type === 'words' ? 'Palavras filtradas são censuradas no chat e destacadas para o admin.' : 'Correspondência parcial, sem diferenciar maiúsculas.'}</p>
       <form class="editor-form" ${formAttr}>
         <input class="field" name="${type}" placeholder="${escapeAttr(placeholder)}" autocomplete="off" />
         <button class="primary-button" type="submit">Adicionar</button>
@@ -1989,6 +2060,7 @@ async function saveModerationList(type, list) {
     if (type === 'words') state.admin.moderation.words = data.words;
     else state.admin.moderation.terms = data.terms;
     renderAdmin();
+    showToast(type === 'words' ? 'Filtro de palavras salvo.' : 'Blacklist de apelidos salva.', 'success');
   } catch (err) {
     showToast(err.message || 'Erro ao salvar.', 'error');
   }
